@@ -101,6 +101,7 @@ object ConfigParser {
                 sb.filterable = DefaultConfig.safeJsonInt(obj, "filterable", 1)
             }
             sb.playerUrl = DefaultConfig.safeJsonString(obj, "playUrl", "")
+            sb.homePage = DefaultConfig.safeJsonString(obj, "homePage", "")
             sb.ext = DefaultConfig.safeJsonString(obj, "ext", "")
             sb.jar = DefaultConfig.safeJsonString(obj, "jar", "")
             sb.playerType = DefaultConfig.safeJsonInt(obj, "playerType", -1)
