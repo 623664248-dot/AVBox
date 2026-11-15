@@ -80,8 +80,7 @@ jobs:
           for k in RELEASE_STORE_FILE RELEASE_KEY_ALIAS RELEASE_STORE_PASSWORD RELEASE_KEY_PASSWORD; do
             grep -q "^$k=" gradle.properties || { echo "::error::gradle.properties 缺少 $k"; exit 1; }
           done
-      - name: Upload APK to Release
-      
+
       - name: Build release APK
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
@@ -99,7 +98,9 @@ jobs:
           fi
           echo "size: $(du -h "$OUT" | cut -f1)"
           echo "path=$OUT" >> "$GITHUB_OUTPUT"
-  uses: softprops/action-gh-release@v3
+
+      - name: Upload APK to Release
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: ${{ steps.version.outputs.version }}
