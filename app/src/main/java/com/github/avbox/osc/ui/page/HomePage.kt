@@ -115,6 +115,8 @@ fun HomePage(
     val context = LocalContext.current
     val currentSource by vm.currentSource.collectAsStateWithLifecycle()
     val sources by vm.sources.collectAsStateWithLifecycle()
+    val homePageUrl by vm.homePageUrl.collectAsStateWithLifecycle()
+    val homePageTarget = homePageUrl
     val vodMenu = rememberVodCardMenuState(
         lookupCollected = vm::isVideoCollected,
         onCollectToggle = vm::toggleVideoCollect,
@@ -283,6 +285,16 @@ fun HomePage(
                         }
                     }
                 }
+            }
+            homePageTarget != null -> {
+                // homePage site (FongMi-style): the site's home is a web page.
+                // Render it full-area under the top bar; no category tabs/grid.
+                HtmlWebView(
+                    url = homePageTarget,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = topPad, bottom = navBottom),
+                )
             }
             else -> {
                 // Single home layout: top category tab row + one full-page grid for the

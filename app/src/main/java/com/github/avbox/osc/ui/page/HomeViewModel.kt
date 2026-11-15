@@ -103,6 +103,9 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
 
     private val _pageLoading = MutableStateFlow(true)
     val pageLoading = _pageLoading.asStateFlow()
+    /** Resolved homePage URL of the current source; non-null means the home content is a WebView, not sorts/lists. */
+    private val _homePageUrl = MutableStateFlow<String?>(null)
+    val homePageUrl = _homePageUrl.asStateFlow()
     private val sortsLoaded = MutableStateFlow(false)
     private val bootReady = MutableStateFlow(false)
     private val _pageErrorEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
@@ -254,6 +257,18 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
         loaders.clear()
         staleLoaders.forEach { it.release() }
         loadGeneration++
+        val resolvedHomePage = ApiConfig.get().resolveHomePage(home)
+        _homePageUrl.value = resolvedHomePage
+        if (resolvedHomePage != null) {
+            // homePage site: home content is a WebView. Skip sort/list loading
+            // entirely — the placeholder csp_ spider must never be initialized
+            // and there is nothing that could report a load failure.
+            AppLog.i("echo--sort-loadHome-homepage: key=${home.key} url=$resolvedHomePage")
+            _rec.value = Rec(PartitionState.Empty, emptyList())
+            sortsLoaded.value = true
+            _pageLoading.value = false
+            return
+        }
         armWatchdog()
         sortViewModel.getSort(loadingSourceKey, false)
     }
@@ -287,6 +302,7 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
     }
 
     fun retrySort() {
+        if (_homePageUrl.value != null) return
         val key = loadingSourceKey ?: return
         AppLog.i("echo--sort-manual-retry: key=$key")
         _sortLoadFailed.value = false

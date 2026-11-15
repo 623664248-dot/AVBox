@@ -30,6 +30,7 @@ import com.github.avbox.osc.util.LocalAddress
 import com.github.avbox.osc.util.RegexUtils
 import com.github.avbox.osc.util.VideoParseRuler
 import com.github.avbox.osc.util.live.TxtSubscribe
+import androidx.media3.common.util.UriUtil
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
@@ -44,6 +45,7 @@ import java.nio.charset.Charset
 import java.util.ArrayList
 import java.util.HashMap
 import java.util.LinkedHashMap
+import java.util.function.Supplier
 import java.util.Locale
 
 class ApiConfig private constructor() {
@@ -862,6 +864,49 @@ class ApiConfig private constructor() {
 
     fun homeSourceBean(): SourceBean {
         return homeSource ?: emptyHome
+    }
+
+    /**
+     * Resolve a site's `homePage` (FongMi-style web home) to a loadable URL, or
+     * null when the site has no homePage.
+     *
+     * Rules:
+     * - blank -> null (not a homePage site).
+     * - Already absolute (http://, https://, file://, content://) -> as-is.
+     * - Otherwise the value is resolved against the current config URL
+     *   (KV API_URL) with [UriUtil.resolve]: "./AV.html", "../x.html",
+     *   "AV.html", "sub/AV.html" land next to the config file, "/AV.html"
+     *   lands at the config host/filesystem root. A clan:// config URL is
+     *   first mapped onto the local file server exactly like
+     *   [ConfigParser.clanToAddress], and a scheme-less config URL gets an
+     *   http:// prefix for resolution only. With no usable config URL the raw
+     *   value is returned so the WebView can still try it.
+     *
+     * Note: [ConfigParser.fixContentPath] already absolutizes most "./" /
+     * "../" values while a config loads; this covers plain relative paths
+     * and configs that bypassed that pass (e.g. restored caches).
+     */
+    fun resolveHomePage(sourceBean: SourceBean?): String? {
+        val raw = sourceBean?.homePage?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        if (raw.startsWith("http://", true) || raw.startsWith("https://", true) ||
+            raw.startsWith("file://", true) || raw.startsWith("content://", true)
+        ) {
+            return raw
+        }
+        var base = KV.get(KVKeys.API_URL, "").trim()
+        if (base.isEmpty()) return raw
+        return try {
+            if (base.startsWith("clan://")) {
+                base = ConfigParser.clanToAddress(base, Supplier { localFileBase() })
+            } else if (!base.startsWith("http") && !base.startsWith("file://")) {
+                base = "http://$base"
+            }
+            UriUtil.resolve(base, raw) ?: raw
+        } catch (e: Exception) {
+            AppLog.e("ApiConfig", e)
+            raw
+        }
     }
 
     val channelGroupList: List<LiveChannelGroup>

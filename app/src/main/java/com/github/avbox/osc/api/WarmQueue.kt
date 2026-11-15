@@ -45,7 +45,7 @@ class WarmQueue(private val owner: ApiConfig, private val spiderLoader: SpiderLo
                     AppLog.i("echo-warm-spider stop: config changed")
                     break
                 }
-                if (source == null || source.type != 3 || !source.isSearchable()) continue
+                if (source == null || source.type != 3 || !source.isSearchable() || source.hasHomePage()) continue
                 if (home != null && TextUtils.equals(home.key, source.key)) continue
                 if (sharedSpiderApis.contains(source.jar + "|" + source.api)) continue
                 if (eligibleCount >= 10) break

@@ -25,6 +25,13 @@ class SourceBean {
 
     var type: Int = 0
 
+    /** FongMi-style web home: when non-blank, selecting this site opens this page in a WebView instead of loading sorts/lists. */
+    var homePage: String? = null
+        get() = safeString(field)
+        set(value) {
+            field = safeString(value)
+        }
+
     var searchable: Int = 0
 
     var quickSearch: Int = 0
@@ -85,6 +92,8 @@ class SourceBean {
         get() = field ?: Collections.emptyMap<String, String>()
 
     private fun safeString(value: String?): String = value ?: ""
+
+    fun hasHomePage(): Boolean = !homePage.isNullOrBlank()
 
     fun isSearchable(): Boolean = searchable != 0
 

@@ -35,6 +35,11 @@ class SearchLoader(
             resultParser.postEmptySearchResult(result, sourceKey, searchToken)
             return
         }
+        if (sourceBean.hasHomePage()) {
+            // homePage site: no native search; never touch the placeholder spider.
+            resultParser.postEmptySearchResult(result, sourceBean.key, searchToken)
+            return
+        }
         val type = sourceBean.type
         if (type == 3) {
             searchFromSpider(sourceBean, wd, result, searchToken)

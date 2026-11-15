@@ -177,6 +177,24 @@ fun HtmlWebScreen(onNavigateBack: () -> Unit) {
     }
 }
 
+/**
+ * Shared WebView for single-file web apps, used by both the standalone
+ * [HtmlWebScreen] and the home page when the current site is a homePage site.
+ * All WebView settings live in the single private implementation below, so
+ * both call sites behave identically. The WebView is (re)created per [url];
+ * in-page navigation stays inside it.
+ */
+@Composable
+fun HtmlWebView(
+    url: String,
+    modifier: Modifier = Modifier,
+) {
+    val holder = remember { HtmlWebHolder() }
+    key(url) {
+        HtmlWebView(url = url, holder = holder, modifier = modifier)
+    }
+}
+
 @Composable
 private fun HtmlWebView(
     url: String,
