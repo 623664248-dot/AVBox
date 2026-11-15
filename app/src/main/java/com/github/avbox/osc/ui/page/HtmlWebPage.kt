@@ -11,6 +11,8 @@ import android.view.ViewGroup
 import android.webkit.JsResult
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -18,6 +20,9 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -190,10 +195,11 @@ fun HtmlWebScreen(onNavigateBack: () -> Unit) {
 fun HtmlWebView(
     url: String,
     modifier: Modifier = Modifier,
+    showLoadError: Boolean = false,
 ) {
     val holder = remember { HtmlWebHolder() }
     key(url) {
-        HtmlWebView(url = url, holder = holder, modifier = modifier)
+        HtmlWebView(url = url, holder = holder, modifier = modifier, showLoadError = showLoadError)
     }
 }
 
@@ -202,6 +208,7 @@ private fun HtmlWebView(
     url: String,
     holder: HtmlWebHolder,
     modifier: Modifier = Modifier,
+    showLoadError: Boolean = false,
 ) {
     var fileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     val chooserLauncher = rememberLauncherForActivityResult(
@@ -218,37 +225,91 @@ private fun HtmlWebView(
         )
     }
 
-    AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            createHtmlWebView(ctx) { callback, params ->
-                fileCallback = callback
-                try {
-                    chooserLauncher.launch(params.createIntent())
-                    true
-                } catch (e: Exception) {
-                    AppLog.e("HtmlWeb", e)
-                    fileCallback = null
-                    callback.onReceiveValue(null)
-                    false
+    // Main-frame load failure (URL + description), shown instead of a silent
+    // blank page when the caller opts in. Also fed by the download listener:
+    // a main-frame response the WebView cannot render (e.g. served as
+    // application/octet-stream) is dropped as a "download" without any
+    // onReceivedError, which used to surface as a pure white screen.
+    var loadError by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val unsupportedMsg = stringResource(R.string.html_web_unsupported_content)
+
+    Box(modifier = modifier) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                createHtmlWebView(
+                    context = ctx,
+                    onLoadStarted = { loadError = null },
+                    onMainFrameError = { failingUrl, description ->
+                        if (showLoadError) loadError = failingUrl to description
+                    },
+                    onShowFileChooser = { callback, params ->
+                        fileCallback = callback
+                        try {
+                            chooserLauncher.launch(params.createIntent())
+                            true
+                        } catch (e: Exception) {
+                            AppLog.e("HtmlWeb", e)
+                            fileCallback = null
+                            callback.onReceiveValue(null)
+                            false
+                        }
+                    },
+                ).also { webView ->
+                    holder.webView = webView
+                    webView.setDownloadListener { downloadUrl, _, _, _, _ ->
+                        if (showLoadError && downloadUrl == url) {
+                            loadError = downloadUrl to unsupportedMsg
+                        }
+                    }
+                    webView.loadUrl(url)
                 }
-            }.also { webView ->
-                holder.webView = webView
-                webView.loadUrl(url)
+            },
+            onRelease = { webView ->
+                if (holder.webView === webView) holder.webView = null
+                FmBridge.detach(webView)
+                webView.stopLoading()
+                webView.destroy()
+            },
+        )
+        val error = loadError
+        if (showLoadError && error != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = stringResource(R.string.html_web_load_failed),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = error.first,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (error.second.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = error.second,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
-        },
-        onRelease = { webView ->
-            if (holder.webView === webView) holder.webView = null
-            FmBridge.detach(webView)
-            webView.stopLoading()
-            webView.destroy()
-        },
-    )
+        }
+    }
 }
 
 @SuppressLint("SetJavaScriptEnabled")
 private fun createHtmlWebView(
     context: Context,
+    onLoadStarted: () -> Unit = {},
+    onMainFrameError: (String, String) -> Unit = { _, _ -> },
     onShowFileChooser: (ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams) -> Boolean,
 ): WebView {
     val webView = WebView(context)
@@ -286,7 +347,22 @@ private fun createHtmlWebView(
     webView.webViewClient = object : WebViewClient() {
         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
             super.onPageStarted(view, url, favicon)
+            onLoadStarted()
             view.evaluateJavascript(FmBridge.SHIM_JS, null)
+        }
+
+        override fun onReceivedError(
+            view: WebView,
+            request: WebResourceRequest,
+            error: WebResourceError,
+        ) {
+            super.onReceivedError(view, request, error)
+            if (request.isForMainFrame) {
+                onMainFrameError(
+                    request.url?.toString().orEmpty(),
+                    error.description?.toString().orEmpty(),
+                )
+            }
         }
 
         override fun onPageFinished(view: WebView, url: String?) {

@@ -132,6 +132,12 @@ fun HomePage(
     }
 
     LaunchedEffect(vm) {
+        vm.toastEvents.collect { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(vm) {
         vm.actionMessages.collect { msg ->
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             vm.refreshPartitions()
@@ -291,6 +297,7 @@ fun HomePage(
                 // Render it full-area under the top bar; no category tabs/grid.
                 HtmlWebView(
                     url = homePageTarget,
+                    showLoadError = true,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(top = topPad, bottom = navBottom),
@@ -411,6 +418,13 @@ fun HomePage(
                                     vm.switchSource(bean)
                                 }
                                 dismissAnimated()
+                            },
+                            onLongClick = {
+                                // Refresh resources: reload the whole config
+                                // (sites all come from it), keep the current
+                                // site; the VM toasts once the reload lands.
+                                dismissAnimated()
+                                vm.refreshConfig()
                             },
                         )
                     }

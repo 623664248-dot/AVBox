@@ -190,6 +190,10 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
                 bootReady.value = it is AppBootstrap.Boot.Ready
                 if (it is AppBootstrap.Boot.Ready) {
                     configReloading = false
+                    if (configRefreshToastPending) {
+                        configRefreshToastPending = false
+                        _toastEvents.tryEmit(str(R.string.home_source_refreshed))
+                    }
                     loadHome()
                 }
             }
@@ -222,6 +226,26 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
         ApiConfig.get().setSourceBean(bean)
         _currentSource.value = bean
         loadHome()
+    }
+
+    private val _toastEvents = MutableSharedFlow<String>(
+        extraBufferCapacity = 4,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val toastEvents: SharedFlow<String> = _toastEvents.asSharedFlow()
+
+    private var configRefreshToastPending = false
+
+    /**
+     * Long-press on a site in the source sheet: reload the current config
+     * through the same path as an API-URL change (fresh re-read, jar reload),
+     * which re-runs loadHome() via the Boot.Ready collector below; a toast
+     * confirms once the reload has actually landed.
+     */
+    fun refreshConfig() {
+        AppLog.i("echo--sort-config-refresh")
+        configRefreshToastPending = true
+        AppBootstrap.onApiUrlChanged()
     }
 
     fun isSubscribeDisabled(item: SubscribeSource): Boolean = BootGuard.isDisabledSource(item.url)

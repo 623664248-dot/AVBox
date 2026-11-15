@@ -182,14 +182,14 @@ class RemoteServer(port: Int, context: Context) : NanoHTTPD(port) {
                         }
                         if (localFile.isFile) {
                             try {
-                                return NanoHTTPD.newChunkedResponse(NanoHTTPD.Response.Status.OK, "application/octet-stream", FileInputStream(localFile))
+                                return NanoHTTPD.newChunkedResponse(NanoHTTPD.Response.Status.OK, mimeTypeFor(f), FileInputStream(localFile))
                             } catch (ignored: Throwable) {
                                 AppLog.d("RemoteServer", "file open failed, fallback to tree grant")
                             }
                         }
                         val granted = if (isLocalRequest(session)) LocalSourceTree.open(requireNotNull(AppContextHolder.context()) { "app context not initialized" }, f) else null
                         if (granted != null) {
-                            return NanoHTTPD.newChunkedResponse(NanoHTTPD.Response.Status.OK, "application/octet-stream", granted)
+                            return NanoHTTPD.newChunkedResponse(NanoHTTPD.Response.Status.OK, mimeTypeFor(f), granted)
                         }
                         return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.INTERNAL_ERROR, NanoHTTPD.MIME_PLAINTEXT, "File $file not found!")
                     } catch (th: Throwable) {
@@ -331,6 +331,36 @@ class RemoteServer(port: Int, context: Context) : NanoHTTPD(port) {
 
     fun loadAddress(): String {
         return "http://127.0.0.1:" + RemoteServer.serverPort + "/"
+    }
+
+    /**
+     * MIME type for /file/ responses, by file extension. Files used to be
+     * served as application/octet-stream unconditionally; HTTP clients do not
+     * care, but a WebView refuses to render an octet-stream document (blank
+     * page), which broke homePage sites whose HTML lives next to a local
+     * config. Unknown extensions keep the octet-stream default.
+     */
+    private fun mimeTypeFor(path: String): String {
+        val name = path.substringAfterLast('/').lowercase()
+        return when {
+            name.endsWith(".html") || name.endsWith(".htm") -> "text/html; charset=utf-8"
+            name.endsWith(".css") -> "text/css; charset=utf-8"
+            name.endsWith(".js") || name.endsWith(".mjs") -> "text/javascript; charset=utf-8"
+            name.endsWith(".json") -> "application/json; charset=utf-8"
+            name.endsWith(".txt") -> "text/plain; charset=utf-8"
+            name.endsWith(".png") -> "image/png"
+            name.endsWith(".jpg") || name.endsWith(".jpeg") -> "image/jpeg"
+            name.endsWith(".gif") -> "image/gif"
+            name.endsWith(".webp") -> "image/webp"
+            name.endsWith(".svg") -> "image/svg+xml"
+            name.endsWith(".ico") -> "image/x-icon"
+            name.endsWith(".mp4") -> "video/mp4"
+            name.endsWith(".mkv") -> "video/x-matroska"
+            name.endsWith(".ts") -> "video/mp2t"
+            name.endsWith(".m3u8") -> "application/vnd.apple.mpegurl"
+            name.endsWith(".mp3") -> "audio/mpeg"
+            else -> "application/octet-stream"
+        }
     }
 
     private fun isLocalRequest(session: NanoHTTPD.IHTTPSession): Boolean {

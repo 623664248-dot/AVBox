@@ -106,6 +106,8 @@
     <string name="html_web_hint">支援任意網頁連結或本機 .html 檔案，頁面會在應用內全屏打開。</string>
     <string name="html_web_invalid_url">連結為空或無效</string>
     <string name="html_web_copy_failed">檔案讀取失敗</string>
+    <string name="html_web_load_failed">頁面載入失敗</string>
+    <string name="html_web_unsupported_content">該位址回傳的內容無法在網頁中開啟</string>
 
     <string name="search_settings">搜尋設定</string>
     <string name="search_no_site">未選擇搜尋站點，請到首頁「搜尋設定」裡勾選</string>
@@ -557,6 +559,7 @@
     <string name="player_seek_forward">往前10秒</string>
     <string name="home_hot_recommend">熱門推薦</string>
     <string name="home_load_failed">首頁載入失敗，請檢查網路後重試</string>
+    <string name="home_source_refreshed">已刷新</string>
     <string name="home_load_partial_timeout">部分內容載入逾時，可下拉重新整理重試</string>
     <string name="detail_rating">評分 %1$s</string>
     <string name="tmdb_meta_title">TMDB 元資料</string>
