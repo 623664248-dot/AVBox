@@ -62,6 +62,10 @@ fun AppTopBarScaffold(
     collapseEnabled: Boolean = true,
     topBarStartInset: Dp = 0.dp,
     topScrimEnabled: Boolean = true,
+    // Hiding the bar (instead of swapping the whole scaffold out) keeps the
+    // content slot at the same composition position: stateful content such
+    // as a WebView survives the toggle, only its top padding changes.
+    topBarVisible: Boolean = true,
     content: @Composable androidx.compose.foundation.layout.BoxScope.(topPadding: androidx.compose.ui.unit.Dp, bottomPadding: androidx.compose.ui.unit.Dp) -> Unit,
 ) {
     val scrollBehavior = if (collapseEnabled) {
@@ -83,31 +87,36 @@ fun AppTopBarScaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         containerColor = containerColor,
         topBar = {
-            CompositionLocalProvider(
-                LocalTopBarGlassBackdrop provides glassBackdrop.takeIf { glassEnabled }
-            ) {
-                TopAppBar(
-                    modifier = Modifier
-                        .windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility)
-                        .padding(start = topBarStartInset),
-                    windowInsets = WindowInsets(0, 0, 0, 0),
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Transparent,
-                        scrolledContainerColor = Color.Transparent,
-                    ),
-                    title = titleContent,
-                    navigationIcon = {
-                        if (navigationIcon != null) {
-                            Box(modifier = Modifier.padding(start = 12.dp)) { navigationIcon() }
-                        }
-                    },
-                    actions = {
-                        Row(modifier = Modifier.padding(end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            actions()
-                        }
-                    },
-                    scrollBehavior = scrollBehavior,
-                )
+            // Empty slot when hidden: Scaffold then reports a top padding of
+            // 0 (contentWindowInsets are zeroed below), so the content gets
+            // the full height without moving in the composition tree.
+            if (topBarVisible) {
+                CompositionLocalProvider(
+                    LocalTopBarGlassBackdrop provides glassBackdrop.takeIf { glassEnabled }
+                ) {
+                    TopAppBar(
+                        modifier = Modifier
+                            .windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility)
+                            .padding(start = topBarStartInset),
+                        windowInsets = WindowInsets(0, 0, 0, 0),
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = Color.Transparent,
+                            scrolledContainerColor = Color.Transparent,
+                        ),
+                        title = titleContent,
+                        navigationIcon = {
+                            if (navigationIcon != null) {
+                                Box(modifier = Modifier.padding(start = 12.dp)) { navigationIcon() }
+                            }
+                        },
+                        actions = {
+                            Row(modifier = Modifier.padding(end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                actions()
+                            }
+                        },
+                        scrollBehavior = scrollBehavior,
+                    )
+                }
             }
         },
     ) { padding ->
