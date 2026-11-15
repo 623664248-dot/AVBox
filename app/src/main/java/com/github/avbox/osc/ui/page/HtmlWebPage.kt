@@ -3,6 +3,7 @@ package com.github.avbox.osc.ui.page
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
@@ -48,6 +49,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.github.avbox.osc.R
+import com.github.avbox.osc.ui.FmBridge
 import com.github.avbox.osc.util.AppLog
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -237,6 +239,7 @@ private fun HtmlWebView(
         },
         onRelease = { webView ->
             if (holder.webView === webView) holder.webView = null
+            FmBridge.detach(webView)
             webView.stopLoading()
             webView.destroy()
         },
@@ -275,8 +278,22 @@ private fun createHtmlWebView(
     if (settings.userAgentString.isNullOrBlank()) {
         settings.userAgentString = WebSettings.getDefaultUserAgent(context)
     }
+    // FongMi WebHome bridge (window.fm): WebHome single-page apps route their
+    // data and playback through it. The shim is injected at page start (the
+    // page waits up to 2.5s for the fmsdk event) and retried on finish.
+    FmBridge.attach(webView)
     // Plain client: in-page navigation stays inside this WebView.
-    webView.webViewClient = WebViewClient()
+    webView.webViewClient = object : WebViewClient() {
+        override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+            super.onPageStarted(view, url, favicon)
+            view.evaluateJavascript(FmBridge.SHIM_JS, null)
+        }
+
+        override fun onPageFinished(view: WebView, url: String?) {
+            super.onPageFinished(view, url)
+            view.evaluateJavascript(FmBridge.SHIM_JS, null)
+        }
+    }
     webView.webChromeClient = object : WebChromeClient() {
         override fun onShowFileChooser(
             webView: WebView,

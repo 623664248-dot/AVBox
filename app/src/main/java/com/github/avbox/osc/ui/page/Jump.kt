@@ -6,13 +6,14 @@ import android.os.Bundle
 import com.github.avbox.osc.ui.DetailActivity
 import com.github.avbox.osc.ui.SearchActivity
 
-fun Context.jumpToDetail(id: String?, sourceKey: String?, title: String?, picture: String?, collect: Boolean = false) {
+fun Context.jumpToDetail(id: String?, sourceKey: String?, title: String?, picture: String?, collect: Boolean = false, autoPlay: Boolean = false) {
     val bundle = Bundle()
     bundle.putString("id", id.orEmpty())
     bundle.putString("sourceKey", sourceKey.orEmpty())
     bundle.putString("title", title)
     bundle.putString("picture", picture)
     bundle.putBoolean("collect", collect)
+    bundle.putBoolean("autoPlay", autoPlay)
     startActivity(Intent(this, DetailActivity::class.java).putExtras(bundle))
 }
 

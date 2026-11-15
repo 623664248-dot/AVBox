@@ -331,6 +331,9 @@ class DetailViewModel : ViewModel(), TmdbPosterCache {
     private var detailRequestToken = 0
 
     private var detailRetryTarget: String? = null
+
+    /** One-shot: set from the navigation target (e.g. WebHome fm.play) and consumed when its detail first becomes Ready. */
+    private var pendingAutoPlay = false
     private var detailRetryJob: Job? = null
 
     private val fallbackCandidates = ArrayList<Movie.Video>()
@@ -449,12 +452,14 @@ class DetailViewModel : ViewModel(), TmdbPosterCache {
             title = bundle.getString("title", "").orEmpty(),
             picture = bundle.getString("picture", "").orEmpty(),
             fromCollect = bundle.getBoolean("collect", false),
+            autoPlay = bundle.getBoolean("autoPlay", false),
         )
     }
 
     private fun applyTarget(target: DetailNavStack.Target) {
         cancelInFlightContent()
         resetContentState()
+        pendingAutoPlay = target.autoPlay
         sendCommand(PlaybackCommand.StopForContentSwitch)
         sendCommand(PlaybackCommand.SetEpisodeSheetOpen(false))
         fromCollect = target.fromCollect
@@ -748,6 +753,10 @@ class DetailViewModel : ViewModel(), TmdbPosterCache {
                 vodName = detailVideo.name ?: vodName
                 if (!playingList.isNullOrEmpty()) switchSnapshot = null
                 _pageState.value = PageState.Ready
+                if (pendingAutoPlay && !playingList.isNullOrEmpty()) {
+                    pendingAutoPlay = false
+                    applyPlaybackEntry(DetailPlaybackEntry.PlayCapsule)
+                }
                 bumpRevision()
                 if (playingList.isNullOrEmpty()) {
                     if (retryDetailOnce("no-line")) return@launch
