@@ -83,6 +83,11 @@
             android:name=".ui.SearchActivity"
             android:windowSoftInputMode="stateHidden|adjustResize" />
         <activity
+            android:name=".ui.HtmlWebActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".ui.PartitionListActivity"
             android:launchMode="singleTop" />
         <activity

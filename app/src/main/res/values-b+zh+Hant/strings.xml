@@ -98,6 +98,15 @@
     <string name="home_recommend">推薦</string>
     <string name="home_all_categories">全部分類</string>
 
+    <string name="html_web_entry">網頁</string>
+    <string name="html_web_title">打開網頁</string>
+    <string name="html_web_url_hint">輸入連結（http / https / file）</string>
+    <string name="html_web_open_link">打開連結</string>
+    <string name="html_web_pick_file">選擇本機檔案</string>
+    <string name="html_web_hint">支援任意網頁連結或本機 .html 檔案，頁面會在應用內全屏打開。</string>
+    <string name="html_web_invalid_url">連結為空或無效</string>
+    <string name="html_web_copy_failed">檔案讀取失敗</string>
+
     <string name="search_settings">搜尋設定</string>
     <string name="search_no_site">未選擇搜尋站點，請到首頁「搜尋設定」裡勾選</string>
     <string name="search_history">搜尋紀錄</string>

@@ -98,6 +98,15 @@
     <string name="home_recommend">推荐</string>
     <string name="home_all_categories">全部分类</string>
 
+    <string name="html_web_entry">网页</string>
+    <string name="html_web_title">打开网页</string>
+    <string name="html_web_url_hint">输入链接（http / https / file）</string>
+    <string name="html_web_open_link">打开链接</string>
+    <string name="html_web_pick_file">选择本地文件</string>
+    <string name="html_web_hint">支持任意网页链接或本地 .html 文件，页面会在应用内全屏打开。</string>
+    <string name="html_web_invalid_url">链接为空或无效</string>
+    <string name="html_web_copy_failed">文件读取失败</string>
+
     <string name="search_settings">搜索设置</string>
     <string name="search_no_site">未选择搜索站点，请到首页「搜索设置」里勾选</string>
     <string name="search_history">搜索历史</string>

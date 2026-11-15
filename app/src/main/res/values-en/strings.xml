@@ -98,6 +98,15 @@
     <string name="home_recommend">Recommended</string>
     <string name="home_all_categories">All Categories</string>
 
+    <string name="html_web_entry">Web</string>
+    <string name="html_web_title">Open Web Page</string>
+    <string name="html_web_url_hint">Enter a URL (http / https / file)</string>
+    <string name="html_web_open_link">Open Link</string>
+    <string name="html_web_pick_file">Pick Local File</string>
+    <string name="html_web_hint">Any web link or local .html file works; the page opens full-screen inside the app.</string>
+    <string name="html_web_invalid_url">Link is empty or invalid</string>
+    <string name="html_web_copy_failed">Failed to read the file</string>
+
     <string name="search_settings">Search Settings</string>
     <string name="search_no_site">No search sites selected. Tick them in Search Settings on the Home page</string>
     <string name="search_history">Search History</string>
