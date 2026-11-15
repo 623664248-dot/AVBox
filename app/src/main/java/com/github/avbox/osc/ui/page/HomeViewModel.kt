@@ -106,6 +106,14 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
     /** Resolved homePage URL of the current source; non-null means the home content is a WebView, not sorts/lists. */
     private val _homePageUrl = MutableStateFlow<String?>(null)
     val homePageUrl = _homePageUrl.asStateFlow()
+    /**
+     * True while a homePage site's WebView is shown full-screen (app top bar
+     * and bottom nav hidden). Turned on when a homePage site is activated,
+     * turned off by [exitHomeWebFullScreen] (back at the web history root)
+     * or when a normal site becomes active.
+     */
+    private val _homeWebFullScreen = MutableStateFlow(false)
+    val homeWebFullScreen = _homeWebFullScreen.asStateFlow()
     private val sortsLoaded = MutableStateFlow(false)
     private val bootReady = MutableStateFlow(false)
     private val _pageErrorEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
@@ -248,6 +256,11 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
         AppBootstrap.onApiUrlChanged()
     }
 
+    /** Back at the web history root: leave full-screen, restoring the app bars. */
+    fun exitHomeWebFullScreen() {
+        _homeWebFullScreen.value = false
+    }
+
     fun isSubscribeDisabled(item: SubscribeSource): Boolean = BootGuard.isDisabledSource(item.url)
 
     fun switchSubscribe(item: SubscribeSource) {
@@ -282,7 +295,13 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
         staleLoaders.forEach { it.release() }
         loadGeneration++
         val resolvedHomePage = ApiConfig.get().resolveHomePage(home)
-        _homePageUrl.value = resolvedHomePage
+        if (resolvedHomePage != _homePageUrl.value) {
+            _homePageUrl.value = resolvedHomePage
+            // A homePage site opens full-screen by default; a normal site
+            // always clears the mode. A reload of the same site (e.g. a
+            // config refresh) keeps the user's current full-screen choice.
+            _homeWebFullScreen.value = resolvedHomePage != null
+        }
         if (resolvedHomePage != null) {
             // homePage site: home content is a WebView. Skip sort/list loading
             // entirely — the placeholder csp_ spider must never be initialized

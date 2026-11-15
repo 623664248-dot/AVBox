@@ -1,6 +1,7 @@
 @file:OptIn(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
 )
 
 package com.github.avbox.osc.ui.page
@@ -8,8 +9,10 @@ package com.github.avbox.osc.ui.page
 import com.github.avbox.osc.api.SearchSourcesState
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -44,6 +47,7 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -117,6 +121,10 @@ fun HomePage(
     val sources by vm.sources.collectAsStateWithLifecycle()
     val homePageUrl by vm.homePageUrl.collectAsStateWithLifecycle()
     val homePageTarget = homePageUrl
+    val webFullScreen by vm.homeWebFullScreen.collectAsStateWithLifecycle()
+    // Shared with both HtmlWebView placements (full-screen and under the top
+    // bar) so the back handler always reaches the live WebView.
+    val webHolder = remember { HtmlWebHolder() }
     val vodMenu = rememberVodCardMenuState(
         lookupCollected = vm::isVideoCollected,
         onCollectToggle = vm::toggleVideoCollect,
@@ -144,178 +152,216 @@ fun HomePage(
         }
     }
 
+    // Full-screen homePage site: back first walks the WebView history; at
+    // the history root it exits full-screen (restoring the app bars) instead
+    // of falling through to MainScreen's press-again-to-exit handler. This
+    // handler is composed after MainScreen's BackHandler, so it wins while
+    // enabled — the same pattern the other pages use for their modal states.
+    BackHandler(enabled = homePageTarget != null && webFullScreen) {
+        val webView = webHolder.webView
+        if (webView != null && webView.canGoBack()) {
+            webView.goBack()
+        } else {
+            vm.exitHomeWebFullScreen()
+        }
+    }
+
     var showSourceSheet by remember { mutableStateOf(false) }
     var showSearchSettings by remember { mutableStateOf(false) }
 
-    AppTopBarScaffold(
-        collapseEnabled = false,
-        topBarStartInset = navStart,
-        topScrimEnabled = true,
-        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        titleContent = {
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier
-                        .widthIn(
-                            max = minOf(
-                                HomeSourceCapsuleMaxWidth,
-                                maxWidth - HomeTopBarControlSpacing,
-                            ),
-                        )
-                        .glassTopBarSurface(ContinuousCapsule, MaterialTheme.colorScheme.cardContainer)
-                        .heightIn(min = 40.dp)
-                        .clickable {
-                            vm.refreshSubscribes()
-                            showSourceSheet = true
-                        }
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val capsuleLogo = remember { ContextCompat.getDrawable(context, R.drawable.ic_launcher_foreground) }
-                    Box(
+    if (homePageTarget != null && webFullScreen) {
+        // homePage sites open full-screen by default: no app top bar here
+        // and no bottom nav (MainScreen hides its bars off the same VM
+        // state), so the WebView fills the whole content area.
+        key(homePageTarget) {
+            HtmlWebView(
+                url = homePageTarget,
+                holder = webHolder,
+                showLoadError = true,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    } else {
+        AppTopBarScaffold(
+            collapseEnabled = false,
+            topBarStartInset = navStart,
+            topScrimEnabled = true,
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            titleContent = {
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    Row(
                         modifier = Modifier
-                            .size(26.dp)
-                            .drawBehind {
-                                capsuleLogo?.let { drawable ->
-                                    val w = size.width
-                                    val h = size.height
-                                    drawable.setBounds(
-                                        (w / 2 - w * CapsuleLogoZoom / 2).roundToInt(),
-                                        (h / 2 - h * CapsuleLogoZoom / 2).roundToInt(),
-                                        (w / 2 + w * CapsuleLogoZoom / 2).roundToInt(),
-                                        (h / 2 + h * CapsuleLogoZoom / 2).roundToInt(),
-                                    )
-                                    drawable.draw(drawContext.canvas.nativeCanvas)
-                                }
-                            },
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = currentSource?.name?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.home_subscription_source),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    Spacer(modifier = Modifier.width(2.dp))
-                    Icon(
-                        painter = painterResource(R.drawable.ic_arrow_down),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-        },
-        actions = {
-            Row(
-                modifier = Modifier
-                    .height(40.dp)
-                    .glassTopBarSurface(ContinuousCapsule, MaterialTheme.colorScheme.surfaceBright),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clickable { showSearchSettings = true },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_more_vert),
-                        contentDescription = stringResource(R.string.search_settings),
-                        tint = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clickable { HtmlWebActivity.start(context) },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Language,
-                        contentDescription = stringResource(R.string.html_web_entry),
-                        tint = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clickable {
-                            context.startActivity(Intent(context, SearchActivity::class.java))
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Search,
-                        contentDescription = stringResource(R.string.common_search),
-                        tint = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-            }
-        },
-    ) { topPad, _ ->
-        when {
-            pageLoading -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    ContainedLoadingIndicator(Modifier.size(64.dp))
-                }
-            }
-            sources.isEmpty() -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = topPad, bottom = navBottom),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            .widthIn(
+                                max = minOf(
+                                    HomeSourceCapsuleMaxWidth,
+                                    maxWidth - HomeTopBarControlSpacing,
+                                ),
+                            )
+                            .glassTopBarSurface(ContinuousCapsule, MaterialTheme.colorScheme.cardContainer)
+                            .heightIn(min = 40.dp)
+                            .combinedClickable(
+                                onClick = {
+                                    vm.refreshSubscribes()
+                                    showSourceSheet = true
+                                },
+                                // Same refresh path as long-pressing a site in
+                                // the source sheet: reload config, toast on land.
+                                onLongClick = { vm.refreshConfig() },
+                            )
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val capsuleLogo = remember { ContextCompat.getDrawable(context, R.drawable.ic_launcher_foreground) }
+                        Box(
+                            modifier = Modifier
+                                .size(26.dp)
+                                .drawBehind {
+                                    capsuleLogo?.let { drawable ->
+                                        val w = size.width
+                                        val h = size.height
+                                        drawable.setBounds(
+                                            (w / 2 - w * CapsuleLogoZoom / 2).roundToInt(),
+                                            (h / 2 - h * CapsuleLogoZoom / 2).roundToInt(),
+                                            (w / 2 + w * CapsuleLogoZoom / 2).roundToInt(),
+                                            (h / 2 + h * CapsuleLogoZoom / 2).roundToInt(),
+                                        )
+                                        drawable.draw(drawContext.canvas.nativeCanvas)
+                                    }
+                                },
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = currentSource?.name?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.home_subscription_source),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
                         Icon(
-                            painter = painterResource(R.drawable.ic_empty_record),
+                            painter = painterResource(R.drawable.ic_arrow_down),
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(64.dp),
+                            modifier = Modifier.size(20.dp),
                         )
-                        Spacer(Modifier.size(12.dp))
-                        Text(
-                            text = stringResource(R.string.home_no_source),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    }
+                }
+            },
+            actions = {
+                Row(
+                    modifier = Modifier
+                        .height(40.dp)
+                        .glassTopBarSurface(ContinuousCapsule, MaterialTheme.colorScheme.surfaceBright),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clickable { showSearchSettings = true },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_more_vert),
+                            contentDescription = stringResource(R.string.search_settings),
+                            tint = MaterialTheme.colorScheme.onSurface,
                         )
-                        TextButton(onClick = { ConfigManageActivity.start(context) }) {
-                            Text(stringResource(R.string.config_add_subscribe))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clickable { HtmlWebActivity.start(context) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Language,
+                            contentDescription = stringResource(R.string.html_web_entry),
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clickable {
+                                context.startActivity(Intent(context, SearchActivity::class.java))
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Search,
+                            contentDescription = stringResource(R.string.common_search),
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            },
+        ) { topPad, _ ->
+            when {
+                pageLoading -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        ContainedLoadingIndicator(Modifier.size(64.dp))
+                    }
+                }
+                sources.isEmpty() -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = topPad, bottom = navBottom),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_empty_record),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(64.dp),
+                            )
+                            Spacer(Modifier.size(12.dp))
+                            Text(
+                                text = stringResource(R.string.home_no_source),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(onClick = { ConfigManageActivity.start(context) }) {
+                                Text(stringResource(R.string.config_add_subscribe))
+                            }
                         }
                     }
                 }
-            }
-            homePageTarget != null -> {
-                // homePage site (FongMi-style): the site's home is a web page.
-                // Render it full-area under the top bar; no category tabs/grid.
-                HtmlWebView(
-                    url = homePageTarget,
-                    showLoadError = true,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = topPad, bottom = navBottom),
-                )
-            }
-            else -> {
-                // Single home layout: top category tab row + one full-page grid for the
-                // selected category (HomeGridLayout). The former stacked-sections home
-                // (hero + one horizontal row per category) has been removed.
-                ProvideTmdbPosterLookup(vm) {
-                    HomeGridLayout(
-                        vm = vm,
-                        topPadding = topPad,
-                        contentPadding = contentPadding,
-                        pullState = pullState,
-                        onCardClick = { video -> handleCardClick(vm, video, context) },
-                        onCardLongClick = { video -> vodMenu.show(video) },
-                    )
+                homePageTarget != null -> {
+                    // homePage site (FongMi-style): the site's home is a web page.
+                    // Render it full-area under the top bar; no category tabs/grid.
+                    // (Full-screen is the default on activation and is handled
+                    // above, before this scaffold is composed at all.)
+                    key(homePageTarget) {
+                        HtmlWebView(
+                            url = homePageTarget,
+                            holder = webHolder,
+                            showLoadError = true,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(top = topPad, bottom = navBottom),
+                        )
+                    }
+                }
+                else -> {
+                    // Single home layout: top category tab row + one full-page grid for the
+                    // selected category (HomeGridLayout). The former stacked-sections home
+                    // (hero + one horizontal row per category) has been removed.
+                    ProvideTmdbPosterLookup(vm) {
+                        HomeGridLayout(
+                            vm = vm,
+                            topPadding = topPad,
+                            contentPadding = contentPadding,
+                            pullState = pullState,
+                            onCardClick = { video -> handleCardClick(vm, video, context) },
+                            onCardLongClick = { video -> vodMenu.show(video) },
+                        )
+                    }
                 }
             }
         }

@@ -167,6 +167,10 @@ private fun MainContent() {
     }
 
     val sheetHost = remember { SheetHostState() }
+    // A homePage site on the home tab opens full-screen: hide every nav bar
+    // and drop the content reserve so the WebView fills the whole area.
+    val homeWebFullScreen by homeViewModel.homeWebFullScreen.collectAsState()
+    val webFullScreenActive = homeWebFullScreen && pagerState.targetPage == AppTab.HOME.ordinal
     val navConfig = UiSettingsState.config
     val navAnimationEnabled = !navConfig.navAnimationDisabled
     val navLiveHidden = navConfig.navLiveHidden
@@ -215,6 +219,7 @@ private fun MainContent() {
     }
     val navReserve = NavMetrics.reserveDp(liquidGlassEnabled, navAxis).dp
     val pageContentPadding: PaddingValues = when {
+        webFullScreenActive -> PaddingValues(0.dp)
         railMode -> PaddingValues(
             start = navReserve + navBarsPadding.calculateStartPadding(layoutDirection),
             bottom = navBarsPadding.calculateBottomPadding(),
@@ -244,7 +249,7 @@ private fun MainContent() {
                 containerColor = MaterialTheme.colorScheme.surfaceContainer,
                 contentWindowInsets = WindowInsets(0, 0, 0, 0),
                 bottomBar = {
-                    if (surfaceNavVisible && !railMode) {
+                    if (surfaceNavVisible && !railMode && !webFullScreenActive) {
                         ShortNavigationBar(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         ) {
@@ -320,7 +325,7 @@ private fun MainContent() {
                     }
                 }
             }
-            if (liquidGlassEnabled) {
+            if (liquidGlassEnabled && !webFullScreenActive) {
                 if (navAxis == NavAxis.Horizontal) {
                     val scrimColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f)
                     Box(
@@ -360,7 +365,7 @@ private fun MainContent() {
                     )
                 }
             }
-            if (surfaceNavVisible && railMode) {
+            if (surfaceNavVisible && railMode && !webFullScreenActive) {
                 NavigationRail(
                     modifier = Modifier
                         .align(Alignment.CenterStart)

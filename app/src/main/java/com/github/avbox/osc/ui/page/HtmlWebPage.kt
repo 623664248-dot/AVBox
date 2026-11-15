@@ -65,8 +65,12 @@ private const val HTML_WEB_PREFS = "html_web"
 private const val KEY_LAST_URL = "last_url"
 private const val HTML_CACHE_DIR = "html"
 
-/** Holds the live WebView outside of composition state so back/toolbar actions can reach it. */
-private class HtmlWebHolder {
+/**
+ * Holds the live WebView outside of composition state so back/toolbar
+ * actions can reach it. Shared with HomePage, whose back handler walks the
+ * WebView history of a full-screen homePage site.
+ */
+class HtmlWebHolder {
     var webView: WebView? = null
 }
 
@@ -187,7 +191,7 @@ fun HtmlWebScreen(onNavigateBack: () -> Unit) {
 /**
  * Shared WebView for single-file web apps, used by both the standalone
  * [HtmlWebScreen] and the home page when the current site is a homePage site.
- * All WebView settings live in the single private implementation below, so
+ * All WebView settings live in the single shared implementation below, so
  * both call sites behave identically. The WebView is (re)created per [url];
  * in-page navigation stays inside it.
  */
@@ -204,7 +208,7 @@ fun HtmlWebView(
 }
 
 @Composable
-private fun HtmlWebView(
+fun HtmlWebView(
     url: String,
     holder: HtmlWebHolder,
     modifier: Modifier = Modifier,
