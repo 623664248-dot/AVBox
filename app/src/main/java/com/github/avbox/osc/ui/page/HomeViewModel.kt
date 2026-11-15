@@ -19,7 +19,6 @@ import com.github.avbox.osc.boot.BootGuard
 import com.github.avbox.osc.util.AppContextHolder
 import com.github.avbox.osc.util.KVKeys
 import com.github.avbox.osc.util.HistoryHelper
-import com.github.avbox.osc.util.HomeSettings
 import com.github.avbox.osc.util.KV
 import com.github.avbox.osc.util.AppLog
 import com.github.avbox.osc.util.LanguageManager
@@ -256,7 +255,7 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
         staleLoaders.forEach { it.release() }
         loadGeneration++
         armWatchdog()
-        sortViewModel.getSort(loadingSourceKey, HomeSettings.layout == HomeSettings.HomeLayout.Horizontal)
+        sortViewModel.getSort(loadingSourceKey, false)
     }
 
     private fun onHomeLoadTimeout() {
@@ -296,7 +295,7 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
         sortsLoaded.value = false
         _pageLoading.value = true
         armWatchdog()
-        sortViewModel.getSort(key, HomeSettings.layout == HomeSettings.HomeLayout.Horizontal)
+        sortViewModel.getSort(key, false)
     }
 
     fun ensureLoaded(sortId: String) {
@@ -307,25 +306,6 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
             if (it.sort.id == sortId) it.copy(state = PartitionState.Loading) else it
         }
         requestPartition(current, Partition.FIRST_PAGE)
-    }
-
-    fun onLayoutChanged() {
-        if (HomeSettings.layout != HomeSettings.HomeLayout.Horizontal) return
-        val idle = _partitions.value.filter { it.state == PartitionState.Idle }
-        if (idle.isNotEmpty()) {
-            _partitions.value = _partitions.value.map {
-                if (it.state == PartitionState.Idle) it.copy(state = PartitionState.Loading) else it
-            }
-            idle.forEach { p -> requestPartition(p, Partition.FIRST_PAGE) }
-        }
-        val key = loadingSourceKey
-        val hasRecSort = _allSorts.value.any { it.id == "my0" }
-        if (key != null && hasRecSort && _rec.value.videos.isEmpty() &&
-            _rec.value.state != PartitionState.Loading
-        ) {
-            _rec.value = Rec(PartitionState.Loading, emptyList())
-            recViewModel.getSort(key, true)
-        }
     }
 
     private fun onSortResult(absXml: AbsSortXml?) {
@@ -349,7 +329,7 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
             if (!sortRetried) {
                 sortRetried = true
                 AppLog.i("echo--sort-retry: src=$key")
-                sortViewModel.getSort(key, HomeSettings.layout == HomeSettings.HomeLayout.Horizontal)
+                sortViewModel.getSort(key, false)
                 return
             }
             AppLog.i("echo--sort-failed: src=$key")
@@ -387,7 +367,7 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
                 scope.launch {
                     delay(2000)
                     if (loadingSourceKey == key && loadGeneration == gen) {
-                        sortViewModel.getSort(key, HomeSettings.layout == HomeSettings.HomeLayout.Horizontal)
+                        sortViewModel.getSort(key, false)
                     }
                 }
                 return
@@ -402,11 +382,10 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
             return
         }
         _sorts.value = visible
-        val vertical = HomeSettings.layout == HomeSettings.HomeLayout.Vertical
         val active = _activeSortId.value?.takeIf { id -> visible.any { it.id == id } } ?: visible.firstOrNull()?.id
         _activeSortId.value = active
         val newPartitions = visible.map { sort ->
-            if (vertical && sort.id != active) {
+            if (sort.id != active) {
                 Partition(sort, PartitionState.Idle, emptyList(), Partition.FIRST_PAGE, 0)
             } else {
                 Partition(sort, PartitionState.Loading, emptyList(), Partition.FIRST_PAGE, 0)
@@ -521,13 +500,8 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
     }
 
     fun refreshPartitions() {
-        val vertical = HomeSettings.layout == HomeSettings.HomeLayout.Vertical
         val active = _activeSortId.value
-        val targets = if (vertical) {
-            _partitions.value.filter { it.sort.id == active }
-        } else {
-            _partitions.value
-        }
+        val targets = _partitions.value.filter { it.sort.id == active }
         _partitions.value = _partitions.value.map { p ->
             if (targets.any { it.sort.id == p.sort.id }) {
                 Partition(p.sort, PartitionState.Loading, emptyList(), Partition.FIRST_PAGE, 0)

@@ -61,7 +61,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.rememberLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.github.avbox.osc.R
@@ -82,7 +81,6 @@ import com.github.avbox.osc.ui.settings.UiSettingsState
 import com.github.avbox.osc.ui.theme.LiquidGlassState
 import com.github.avbox.osc.util.ActivityStack
 import com.github.avbox.osc.boot.BootGuard
-import com.github.avbox.osc.util.HomeSettings
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.launch
@@ -323,9 +321,7 @@ private fun MainContent() {
                 }
             }
             if (liquidGlassEnabled) {
-                val homeHorizontal = HomeSettings.layoutFlow.collectAsStateWithLifecycle().value ==
-                    HomeSettings.HomeLayout.Horizontal
-                if (navAxis == NavAxis.Horizontal && !homeHorizontal) {
+                if (navAxis == NavAxis.Horizontal) {
                     val scrimColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f)
                     Box(
                         modifier = Modifier

@@ -26,18 +26,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.github.avbox.osc.R
 import com.github.avbox.osc.bean.SourceBean
 import com.github.avbox.osc.util.SearchSettingsState
-import com.github.avbox.osc.util.HomeSettings
 
 private val SourceCardShapeLeft = RoundedCornerShape(
     topStart = 28.dp,
@@ -63,7 +60,6 @@ fun SearchSettingsSheet(
     onDismiss: () -> Unit,
 ) {
     val allKeys = remember(sources) { sources.map { it.key.orEmpty() }.toSet() }
-    val homeLayout by HomeSettings.layoutFlow.collectAsStateWithLifecycle()
     var exactMatch by remember { mutableStateOf(SearchSettingsState.exactMatch) }
 
     val maxSheetHeight = (LocalConfiguration.current.screenHeightDp * 0.7f).dp
@@ -73,36 +69,6 @@ fun SearchSettingsSheet(
         title = stringResource(R.string.search_settings),
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
         modifier = Modifier.heightIn(max = maxSheetHeight),
-        headerContent = {
-            Text(
-                text = stringResource(R.string.search_home_poster),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
-            )
-            CapsuleSegmentedButton(
-                options = listOf(
-                    SegmentOption(
-                        label = stringResource(R.string.search_layout_horizontal),
-                        value = HomeSettings.HomeLayout.Horizontal,
-                        iconPainter = painterResource(R.drawable.ic_layout_horizontal),
-                    ),
-                    SegmentOption(
-                        label = stringResource(R.string.search_layout_vertical),
-                        value = HomeSettings.HomeLayout.Vertical,
-                        iconPainter = painterResource(R.drawable.ic_layout_vertical),
-                    ),
-                ),
-                selectedValue = homeLayout,
-                onOptionSelected = { HomeSettings.layout = it },
-                style = SegmentStyle.Separated,
-                containerColor = MaterialTheme.colorScheme.surfaceBright,
-                pressMorph = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
-            )
-        },
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             SettingsGroup(title = null) {
