@@ -158,7 +158,7 @@ object LxBridge {
     }
 
     /** Waits for the loaded script's send('inited') source registry. */
-    suspend fun awaitInited(timeoutMs: Long = 15_000L): Map<String, SourceInfo> {
+    suspend fun awaitInited(timeoutMs: Long = 30_000L): Map<String, SourceInfo> {
         val deferred = initedDeferred ?: throw LxException("no script loaded")
         val result = withTimeoutOrNull(timeoutMs) { deferred.await() }
             ?: throw LxException("音源脚本初始化超时")

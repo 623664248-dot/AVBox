@@ -5,10 +5,13 @@
 
 package com.github.avbox.osc.ui.music
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -16,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -42,6 +46,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -64,6 +70,17 @@ fun LxMusicPlayerScreen(
     onSelectQueueItem: (Int) -> Unit,
 ) {
     val track = state.current
+    var immersive by remember { mutableStateOf(false) }
+    if (immersive) {
+        BackHandler { immersive = false }
+        ImmersiveLyrics(
+            state = state,
+            onExit = { immersive = false },
+            onTogglePlay = onTogglePlay,
+            onNext = onNext,
+            onPrev = onPrev,
+        )
+    } else {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -93,7 +110,8 @@ fun LxMusicPlayerScreen(
         Box(
             modifier = Modifier
                 .size(200.dp)
-                .align(Alignment.CenterHorizontally),
+                .align(Alignment.CenterHorizontally)
+                .clickable { immersive = true },
             contentAlignment = Alignment.Center,
         ) {
             if (track?.img != null) {
@@ -159,6 +177,7 @@ fun LxMusicPlayerScreen(
             onNext = onNext,
             onPrev = onPrev,
         )
+    }
     }
 
     if (state.showQueue) {
@@ -323,6 +342,170 @@ private fun ProgressControls(
                     modifier = Modifier.size(36.dp),
                 )
             }
+        }
+    }
+}
+
+/**
+ * Immersive mode: the cover fills the whole screen as the background under a
+ * dark gradient, lyrics render large and centered on top. Tapping anywhere
+ * outside the controls (or the system back key, handled by the caller)
+ * exits back to the normal layout. Controls stay minimal: prev/play/next.
+ */
+@Composable
+private fun ImmersiveLyrics(
+    state: LxPlayerState,
+    onExit: () -> Unit,
+    onTogglePlay: () -> Unit,
+    onNext: () -> Unit,
+    onPrev: () -> Unit,
+) {
+    val track = state.current
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable { onExit() },
+        ) {
+            if (track?.img != null) {
+                AsyncImage(
+                    model = track.img,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Black.copy(alpha = 0.45f),
+                                Color.Black.copy(alpha = 0.78f),
+                            ),
+                        ),
+                    ),
+            )
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+        ) {
+            Text(
+                text = track?.name ?: "",
+                style = MaterialTheme.typography.titleLarge,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = track?.singer ?: "",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.75f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (state.buffering) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = Color.White)
+                }
+            }
+            ImmersiveLyricList(state = state, modifier = Modifier.weight(1f))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onPrev, modifier = Modifier.size(56.dp)) {
+                    Icon(
+                        painter = painterResource(R.drawable.player_ic_prev),
+                        contentDescription = stringResource(R.string.music_previous),
+                        modifier = Modifier.size(36.dp),
+                        tint = Color.White,
+                    )
+                }
+                IconButton(onClick = onTogglePlay, modifier = Modifier.size(72.dp)) {
+                    Icon(
+                        painter = painterResource(
+                            if (state.playing) R.drawable.player_ic_pause else R.drawable.player_ic_play,
+                        ),
+                        contentDescription = stringResource(
+                            if (state.playing) R.string.common_pause else R.string.common_play,
+                        ),
+                        modifier = Modifier.size(56.dp),
+                        tint = Color.White,
+                    )
+                }
+                IconButton(onClick = onNext, modifier = Modifier.size(56.dp)) {
+                    Icon(
+                        painter = painterResource(R.drawable.player_ic_next),
+                        contentDescription = stringResource(R.string.music_next),
+                        modifier = Modifier.size(36.dp),
+                        tint = Color.White,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Same lyric data/parser as the normal layout, just larger and on-dark. */
+@Composable
+private fun ImmersiveLyricList(state: LxPlayerState, modifier: Modifier = Modifier) {
+    if (state.lyricLines.isEmpty()) {
+        Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Text(
+                text = stringResource(R.string.music_no_lyric),
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color.White.copy(alpha = 0.75f),
+            )
+        }
+        return
+    }
+    val currentLine = remember(state.lyricLines, state.positionMs) {
+        state.lyricLines.indexOfLast { it.timeMs <= state.positionMs }
+    }
+    val listState = rememberLazyListState()
+    LaunchedEffect(currentLine) {
+        if (currentLine >= 0) {
+            listState.animateScrollToItem(currentLine)
+        }
+    }
+    LazyColumn(
+        state = listState,
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(vertical = 24.dp),
+    ) {
+        itemsIndexed(state.lyricLines, key = { index, _ -> index }) { index, line ->
+            Text(
+                text = line.text,
+                style = if (index == currentLine) {
+                    MaterialTheme.typography.headlineSmall
+                } else {
+                    MaterialTheme.typography.titleMedium
+                },
+                color = if (index == currentLine) {
+                    Color.White
+                } else {
+                    Color.White.copy(alpha = 0.55f)
+                },
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }

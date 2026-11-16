@@ -146,6 +146,7 @@ dependencies {
     implementation(libs.media3.datasource.rtmp)
     implementation(libs.media3.database)
     implementation(libs.media3.ui)
+    implementation(libs.media3.session)
     implementation(libs.media3.ffmpeg.decoder)
     implementation(libs.media3.effect)
     implementation(project(":quickjs"))

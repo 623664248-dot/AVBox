@@ -253,8 +253,11 @@ class MusicViewModel : ViewModel() {
     }
 
     private fun savedScriptId(): String {
-        val saved: String? = KV.get(KV_SCRIPT_ID)
-        return saved?.takeIf { id -> allDefs().any { it.id == id } }
+        // Must pass a String default: KV returns null for keys that are not
+        // registered in the KVKeySpec table when no default is given, which
+        // made the saved script choice never persist. "" means "not saved".
+        val saved: String = KV.get(KV_SCRIPT_ID, "")
+        return saved.takeIf { id -> id.isNotEmpty() && allDefs().any { it.id == id } }
             ?: LxBridge.SCRIPTS.first().id
     }
 

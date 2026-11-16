@@ -227,3 +227,68 @@ name/singer/albumName/interval(mm:ss)/img/types/typeUrl 等洛雪标准字段。
   带 18dp 搜索小图标，取代原外置的 🔍 按钮；搜索行只剩胶囊本体，
   位于搜索模式内容区顶部。搜索逻辑与热搜/结果/分页行为不变。
 - 播放器、LxBridge、MusicApi 未动。
+
+## v1.9.0 音源导入修复 + 沉浸歌词 + 后台播放
+
+### 音源导入不显示 / 切换不生效（根因修复）
+
+真机录屏实证：导入用户音源脚本提示成功，但音源弹窗里永远只有
+内置两个、切换也存不住、findDef 回退到默认脚本。根因在 KV 层：
+KVDecoder.decode 在 defaultValue==null 时走 KVKeySpec 注册表查
+类型，未注册的 key 直接返回 null。音乐代码有两处用无默认值方式
+读 KV，于是永远读到 null：
+
+- music/LxUserScripts.kt 的 readMetas()：KV.get(KV_USER_SCRIPTS)
+  改为 KV.get(KV_USER_SCRIPTS, "")，空串按「无已注册脚本」处理。
+- ui/page/MusicViewModel.kt 的 savedScriptId()：
+  KV.get(KV_SCRIPT_ID) 改为 KV.get(KV_SCRIPT_ID, "")，空串按
+  未保存处理。
+
+带 String 默认值时 resolveType 直接用 String 类型、parse 原样
+返回，往返成立。全局复查 music/、ui/music/、MusicPage、
+MusicViewModel，无其它无默认值 KV.get 调用。另外
+music/LxBridge.kt 的 awaitInited 默认超时 15s 提到 30s：
+jsjiami 混淆脚本在 QuickJS 里解码慢，原超时下容易误判初始化
+失败（该类脚本已在 Node 洛雪宿主模拟中验证可正常 inited）。
+
+### 播放器沉浸歌词（ui/music/LxMusicPlayerScreen.kt）
+
+点封面进入沉浸模式：封面图全屏铺满（ContentScale.Crop）作
+背景，上覆深色竖向渐变遮罩；歌词居中大字号显示（当前行
+headlineSmall 白色高亮，其余 titleMedium 半透明白），复用现有
+lyricLines 数据与 MusicLrc 解析，不新造管线。沉浸模式保留最小
+控制（上一首 / 播放暂停 / 下一首，白色图标）与缓冲指示；点
+背景任意处或系统返回键退出，回普通布局。普通布局结构未动，
+仅封面 Box 增加点击入口。
+
+### 后台播放（切后台 / 锁屏继续播 + 系统媒体通知）
+
+播放器由 Activity 持有改为服务持有：
+
+- 依赖：gradle/libs.versions.toml 新增 media3-session
+  （androidx.media3，version.ref = "media3"，与 exoplayer 同
+  版本）；app/build.gradle.kts 加 implementation(libs.media3.session)。
+- 新增 music/LxPlaybackService.kt：MediaSessionService，内部
+  建 ExoPlayer（音乐 AudioAttributes）与 MediaSession；通知用
+  media3 自带的 DefaultMediaNotification.Provider（服务默认
+   provider），应用图标 + MediaItem 的 MediaMetadata（标题 /
+  歌手 / 封面 artworkUri）自动呈现，锁屏 / 通知栏可播放暂停；
+  任务被划掉且处于暂停时 stopSelf，已播完不残留服务。
+- ui/music/LxMusicPlayerActivity.kt 改用 MediaController 连接
+  服务：「先经 LxBridge.getMusicUrl 解析直链再播」的流程保留在
+  UI 层，解析后把带 metadata 的 MediaItem 交给 controller；
+  播放状态 / 进度 / 缓冲从 controller 的 Player.Listener 与
+  ticker 观察回 LxPlayerState；上一首 / 下一首 / 播完自动连播
+  语义不变，只是执行对象换成 controller；controller 未连接时
+  playAt 先挂起（pendingPlay），连接成功后自动补播；Activity
+  销毁只断开 controller，不停服务，后台继续播放。
+- AndroidManifest 注册 LxPlaybackService（exported=true，
+  intent-filter MediaSessionService + MediaButtonReceiver，
+  foregroundServiceType="mediaPlayback"）。权限
+  FOREGROUND_SERVICE / FOREGROUND_SERVICE_MEDIA_PLAYBACK /
+  POST_NOTIFICATIONS 本就已声明；播放页 init 时经
+  PermissionHelper.requestNotificationIfNeeded 请求通知权限，
+  拿不到不阻断播放。
+- 已知限制：服务里只持当前一首 MediaItem，系统通知 / 锁屏上
+  只有播放暂停（上一首 / 下一首在 App 内），与原单曲解析模型
+  一致；影视播放器（ui.MusicPlayerActivity、player 包）未动。

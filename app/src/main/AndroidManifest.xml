@@ -153,6 +153,15 @@
             android:name=".player.PlaybackService"
             android:foregroundServiceType="mediaPlayback"
             android:exported="false" />
+        <service
+            android:name=".music.LxPlaybackService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.media.session.MediaSessionService" />
+                <action android:name="android.media.session.MediaButtonReceiver" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>

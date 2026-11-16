@@ -153,8 +153,11 @@ object LxUserScripts {
     }
 
     private fun readMetas(): List<Meta> {
-        val raw: String? = KV.get(KV_USER_SCRIPTS)
-        if (raw.isNullOrBlank()) return emptyList()
+        // Must pass a String default: KV returns null for keys that are not
+        // registered in the KVKeySpec table when no default is given, which
+        // made imported scripts invisible. "" means "no scripts registered".
+        val raw: String = KV.get(KV_USER_SCRIPTS, "")
+        if (raw.isBlank()) return emptyList()
         return try {
             val array = JSONArray(raw)
             val list = ArrayList<Meta>()
