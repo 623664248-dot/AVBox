@@ -204,3 +204,26 @@ name/singer/albumName/interval(mm:ss)/img/types/typeUrl 等洛雪标准字段。
   键）加状态栏 inset，不再与状态栏重叠。
 - 已知限制：榜单歌曲只加载第一页 50 首；kw 无榜单；wy 在个别
   网络出口下可能因加密载荷显示空态，需真机再验。
+
+## v1.8.1 音乐页布局
+
+按使用反馈重排音乐页（MusicPage / MusicViewModel）：
+
+- 第一行 = 资源站点：平台 chips 行挪到页面最上方（状态栏 inset
+  之下），chips 区横向滚动占满剩余宽度，「音源」按钮固定在这一行
+  右端（原来在搜索行里）。
+- 第二行 = [搜索 | 排行榜] 分段切换，且默认选中排行榜：
+  MusicViewModel 的 mode 初始值改为 CHARTS；启动时桥初始化成功
+  （含回退默认脚本）后自动 loadCharts() 一次，切平台/切脚本/切
+  模式仍走原有重载路径，不会重复触发。
+- 排行榜平铺：榜单目录由列表行改为两列封面网格
+  （LazyVerticalGrid，GridCells.Fixed(2)）：方形封面（圆角 12dp）
+  + 榜名（最多 2 行）+ 更新提示小字（有才显示）。点卡仍进歌曲
+  列表（UI 不变），返回回网格；酷我空态不变。
+- 搜索框改自绘胶囊：44dp 固定高的 OutlinedTextField 在真机上把
+  占位文字上下裁切（压扁/重影），换成 BorderStroke 描边的
+  Surface（CircleShape，高 46dp，内容垂直居中）+ BasicTextField
+  （15sp，空时自绘占位，IME 搜索键触发 vm.search），胶囊内左侧
+  带 18dp 搜索小图标，取代原外置的 🔍 按钮；搜索行只剩胶囊本体，
+  位于搜索模式内容区顶部。搜索逻辑与热搜/结果/分页行为不变。
+- 播放器、LxBridge、MusicApi 未动。

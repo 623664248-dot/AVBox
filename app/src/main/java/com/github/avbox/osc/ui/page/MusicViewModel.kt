@@ -60,7 +60,7 @@ class MusicViewModel : ViewModel() {
     private val _searched = MutableStateFlow(false)
     val searched: StateFlow<Boolean> = _searched.asStateFlow()
 
-    private val _mode = MutableStateFlow(MusicMode.SEARCH)
+    private val _mode = MutableStateFlow(MusicMode.CHARTS)
     val mode: StateFlow<MusicMode> = _mode.asStateFlow()
 
     private val _charts = MutableStateFlow<List<MusicChart>>(emptyList())
@@ -106,6 +106,10 @@ class MusicViewModel : ViewModel() {
                 // loads; fall back to the default built-in so the tab works.
                 initBridge(LxBridge.SCRIPTS.first().id)
             }
+            // Charts is the default mode: once the platform list is ready,
+            // load its catalog. Script switches and platform changes reload
+            // through their own paths, so this hook runs only at startup.
+            if (_mode.value == MusicMode.CHARTS) loadCharts()
         }
         viewModelScope.launch {
             _hotWords.value = MusicApi.hotWords()
