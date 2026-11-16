@@ -386,3 +386,13 @@ lyricLines 数据与 MusicLrc 解析，不新造管线。沉浸模式保留最�
 - 修复：两处改为显式 `setStrength(EQ_EFFECT_STRENGTH)` 调用
   （已对 android.jar 字节码核对；`strengthSupported` 属性合法，
   编译器亦未报错）。
+
+## v1.10.0 二次构建失败修复（版本号不变）
+
+- 修复版构建仍死于 `:app:compileReleaseKotlin`：MusicAppearance
+  的四个 `var ... private set` 属性生成的 JVM setter 与手写的
+  `setBgPath/setBlurDp/setScrimPercent/setEqMode` 函数签名冲突
+  （Platform declaration clash，日志实证，共 8 处）。
+- 修复：四个函数改名为 `updateBgPath/updateBlurDp/
+  updateScrimPercent/updateEqMode`，同文件内 5 处调用同步改名；
+  无其他文件引用这些函数。

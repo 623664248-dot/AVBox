@@ -96,24 +96,24 @@ object MusicAppearance {
         return raw.toIntOrNull() ?: default
     }
 
-    fun setBgPath(path: String) {
+    fun updateBgPath(path: String) {
         bgPath = path
         KV.put(KEY_BG_PATH, path)
     }
 
-    fun setBlurDp(value: Int) {
+    fun updateBlurDp(value: Int) {
         val coerced = value.coerceIn(0, MAX_BLUR_DP)
         blurDp = coerced
         KV.put(KEY_BLUR_DP, coerced.toString())
     }
 
-    fun setScrimPercent(value: Int) {
+    fun updateScrimPercent(value: Int) {
         val coerced = value.coerceIn(0, MAX_SCRIM_PERCENT)
         scrimPercent = coerced
         KV.put(KEY_SCRIM_PERCENT, coerced.toString())
     }
 
-    fun setEqMode(mode: String) {
+    fun updateEqMode(mode: String) {
         eqMode = mode
         KV.put(KEY_EQ_MODE, mode)
     }
@@ -222,7 +222,7 @@ fun MusicAppearanceSheet(
                 MusicAppearance.copyBackgroundImage(context, uri)
             }
             if (path != null) {
-                MusicAppearance.setBgPath(path)
+                MusicAppearance.updateBgPath(path)
             } else {
                 Toast.makeText(context, pickFailedMsg, Toast.LENGTH_SHORT).show()
             }
@@ -252,7 +252,7 @@ fun MusicAppearanceSheet(
                     Text(stringResource(R.string.music_appearance_pick_bg))
                 }
                 TextButton(
-                    onClick = { MusicAppearance.setBgPath("") },
+                    onClick = { MusicAppearance.updateBgPath("") },
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(stringResource(R.string.music_appearance_reset_bg))
@@ -265,7 +265,7 @@ fun MusicAppearanceSheet(
             )
             Slider(
                 value = MusicAppearance.blurDp.toFloat(),
-                onValueChange = { MusicAppearance.setBlurDp(it.roundToInt()) },
+                onValueChange = { MusicAppearance.updateBlurDp(it.roundToInt()) },
                 valueRange = 0f..MusicAppearance.MAX_BLUR_DP.toFloat(),
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -279,7 +279,7 @@ fun MusicAppearanceSheet(
             )
             Slider(
                 value = MusicAppearance.scrimPercent.toFloat(),
-                onValueChange = { MusicAppearance.setScrimPercent(it.roundToInt()) },
+                onValueChange = { MusicAppearance.updateScrimPercent(it.roundToInt()) },
                 valueRange = 0f..MusicAppearance.MAX_SCRIM_PERCENT.toFloat(),
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -321,7 +321,7 @@ fun MusicAppearanceSheet(
 }
 
 private fun selectEq(mode: String, onEqModeSelected: (String) -> Unit) {
-    MusicAppearance.setEqMode(mode)
+    MusicAppearance.updateEqMode(mode)
     onEqModeSelected(mode)
 }
 
