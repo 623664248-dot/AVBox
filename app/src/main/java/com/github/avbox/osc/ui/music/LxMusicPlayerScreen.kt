@@ -35,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -68,9 +69,11 @@ fun LxMusicPlayerScreen(
     onSeek: (Long) -> Unit,
     onToggleQueue: () -> Unit,
     onSelectQueueItem: (Int) -> Unit,
+    onEqModeSelected: (String) -> Unit = {},
 ) {
     val track = state.current
     var immersive by remember { mutableStateOf(false) }
+    var appearanceOpen by remember { mutableStateOf(false) }
     if (immersive) {
         BackHandler { immersive = false }
         ImmersiveLyrics(
@@ -81,6 +84,10 @@ fun LxMusicPlayerScreen(
             onPrev = onPrev,
         )
     } else {
+    Box(modifier = Modifier.fillMaxSize()) {
+        // RikkaHub-style backdrop: custom image or the current cover,
+        // blurred and dimmed per MusicAppearance.
+        MusicBackground(fallbackModel = track?.img)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -95,44 +102,59 @@ fun LxMusicPlayerScreen(
                 Icon(
                     painter = painterResource(R.drawable.ic_arrow_left),
                     contentDescription = stringResource(R.string.common_back),
+                    tint = Color.White,
                 )
             }
             Spacer(Modifier.weight(1f))
+            IconButton(onClick = { appearanceOpen = true }) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_settings_theme),
+                    contentDescription = stringResource(R.string.music_appearance),
+                    tint = Color.White,
+                )
+            }
             IconButton(onClick = onToggleQueue) {
                 Icon(
                     painter = painterResource(R.drawable.ic_music_queue),
                     contentDescription = stringResource(R.string.music_queue),
+                    tint = Color.White,
                 )
             }
         }
 
         Spacer(Modifier.height(8.dp))
-        Box(
-            modifier = Modifier
-                .size(200.dp)
-                .align(Alignment.CenterHorizontally)
-                .clickable { immersive = true },
-            contentAlignment = Alignment.Center,
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color.White.copy(alpha = 0.10f),
+            modifier = Modifier.align(Alignment.CenterHorizontally),
         ) {
-            if (track?.img != null) {
-                AsyncImage(
-                    model = track.img,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(RoundedCornerShape(16.dp)),
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Filled.MusicNote,
-                    contentDescription = null,
-                    modifier = Modifier.size(96.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (state.buffering) {
-                CircularProgressIndicator()
+            Box(
+                modifier = Modifier
+                    .padding(8.dp)
+                    .size(184.dp)
+                    .clickable { immersive = true },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (track?.img != null) {
+                    AsyncImage(
+                        model = track.img,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(16.dp)),
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.MusicNote,
+                        contentDescription = null,
+                        modifier = Modifier.size(96.dp),
+                        tint = Color.White.copy(alpha = 0.7f),
+                    )
+                }
+                if (state.buffering) {
+                    CircularProgressIndicator(color = Color.White)
+                }
             }
         }
 
@@ -140,6 +162,7 @@ fun LxMusicPlayerScreen(
         Text(
             text = track?.name ?: "",
             style = MaterialTheme.typography.titleLarge,
+            color = Color.White,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
@@ -148,7 +171,7 @@ fun LxMusicPlayerScreen(
         Text(
             text = track?.singer ?: "",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = Color.White.copy(alpha = 0.75f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
@@ -168,16 +191,48 @@ fun LxMusicPlayerScreen(
         }
 
         Spacer(Modifier.height(12.dp))
-        LyricArea(state = state, modifier = Modifier.weight(1f))
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color.White.copy(alpha = 0.08f),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+        ) {
+            LyricArea(
+                state = state,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(vertical = 8.dp),
+            )
+        }
 
-        ProgressControls(
-            state = state,
-            onSeek = onSeek,
-            onTogglePlay = onTogglePlay,
-            onNext = onNext,
-            onPrev = onPrev,
-        )
+        Spacer(Modifier.height(12.dp))
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color.White.copy(alpha = 0.10f),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                ProgressControls(
+                    state = state,
+                    onSeek = onSeek,
+                    onTogglePlay = onTogglePlay,
+                    onNext = onNext,
+                    onPrev = onPrev,
+                )
+            }
+        }
     }
+    }
+    }
+
+    if (appearanceOpen) {
+        MusicAppearanceSheet(
+            onDismissRequest = { appearanceOpen = false },
+            showEqSection = true,
+            eqPresets = state.eqPresets,
+            onEqModeSelected = onEqModeSelected,
+        )
     }
 
     if (state.showQueue) {
@@ -237,7 +292,7 @@ private fun LyricArea(state: LxPlayerState, modifier: Modifier = Modifier) {
             Text(
                 text = stringResource(R.string.music_no_lyric),
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = Color.White.copy(alpha = 0.6f),
             )
         }
         return
@@ -266,9 +321,9 @@ private fun LyricArea(state: LxPlayerState, modifier: Modifier = Modifier) {
                     MaterialTheme.typography.bodyMedium
                 },
                 color = if (index == currentLine) {
-                    MaterialTheme.colorScheme.primary
+                    Color.White
                 } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                    Color.White.copy(alpha = 0.6f)
                 },
                 textAlign = TextAlign.Center,
             )
@@ -296,18 +351,23 @@ private fun ProgressControls(
                 seekFraction?.let { onSeek((it * duration).toLong()) }
                 seekFraction = null
             },
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = Color.White,
+                inactiveTrackColor = Color.White.copy(alpha = 0.35f),
+            ),
         )
         Row(modifier = Modifier.fillMaxWidth()) {
             Text(
                 text = formatTimeMs((fraction * duration).toLong()),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = Color.White.copy(alpha = 0.75f),
             )
             Spacer(Modifier.weight(1f))
             Text(
                 text = formatTimeMs(state.durationMs),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = Color.White.copy(alpha = 0.75f),
             )
         }
         Row(
@@ -322,6 +382,7 @@ private fun ProgressControls(
                     painter = painterResource(R.drawable.player_ic_prev),
                     contentDescription = stringResource(R.string.music_previous),
                     modifier = Modifier.size(36.dp),
+                    tint = Color.White,
                 )
             }
             IconButton(onClick = onTogglePlay, modifier = Modifier.size(72.dp)) {
@@ -333,6 +394,7 @@ private fun ProgressControls(
                         if (state.playing) R.string.common_pause else R.string.common_play,
                     ),
                     modifier = Modifier.size(56.dp),
+                    tint = Color.White,
                 )
             }
             IconButton(onClick = onNext, modifier = Modifier.size(56.dp)) {
@@ -340,6 +402,7 @@ private fun ProgressControls(
                     painter = painterResource(R.drawable.player_ic_next),
                     contentDescription = stringResource(R.string.music_next),
                     modifier = Modifier.size(36.dp),
+                    tint = Color.White,
                 )
             }
         }

@@ -2,6 +2,9 @@ package com.github.avbox.osc.ui.music
 
 import android.content.Context
 import android.content.Intent
+import android.media.audiofx.BassBoost
+import android.media.audiofx.Equalizer
+import android.media.audiofx.Virtualizer
 import android.widget.Toast
 import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.lifecycleScope
@@ -36,6 +39,9 @@ class LxMusicPlayerActivity : BaseActivity() {
         private const val EXTRA_QUEUE = "lx_queue"
         private const val EXTRA_INDEX = "lx_index"
 
+        /** AudioFX strength scale is 0..1000; 700 is a clearly audible boost. */
+        private const val EQ_EFFECT_STRENGTH: Short = 700
+
         fun start(context: Context, queueJson: String, index: Int) {
             context.startActivity(
                 Intent(context, LxMusicPlayerActivity::class.java)
@@ -50,6 +56,14 @@ class LxMusicPlayerActivity : BaseActivity() {
     private var resolveJob: Job? = null
     private var lyricJob: Job? = null
     private var tickerJob: Job? = null
+
+    // Sound effects (AudioFX) attached to the player's audio session. Any
+    // of them may be null on devices without audiofx support; every use is
+    // guarded so a missing effect can never break playback.
+    private var equalizer: Equalizer? = null
+    private var bassBoost: BassBoost? = null
+    private var virtualizer: Virtualizer? = null
+    private var effectsSessionId: Int = 0
 
     override fun shouldRefreshAutoSize(): Boolean = true
 
@@ -80,6 +94,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                             state.showQueue = false
                             playAt(i)
                         },
+                        onEqModeSelected = { ensureEffects() },
                     )
                 }
             }
@@ -110,6 +125,9 @@ class LxMusicPlayerActivity : BaseActivity() {
         exo.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 state.buffering = playbackState == Player.STATE_BUFFERING
+                if (playbackState == Player.STATE_READY) {
+                    ensureEffects()
+                }
                 if (playbackState == Player.STATE_ENDED) {
                     playAt(state.index + 1)
                 }
@@ -145,6 +163,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                 val exo = player ?: return@launch
                 exo.setMediaItem(MediaItem.fromUri(url))
                 exo.prepare()
+                ensureEffects()
                 exo.play()
             } catch (e: Exception) {
                 state.buffering = false
@@ -172,10 +191,128 @@ class LxMusicPlayerActivity : BaseActivity() {
         }
     }
 
+    /**
+     * Creates the AudioFX effects for the player's current audio session
+     * when they are missing or the session changed, then applies the
+     * persisted EQ mode. The session id is only assigned once the player
+     * has prepared an audio track, so this is called again from the
+     * playback callbacks; it is cheap and idempotent. Every step is
+     * guarded: devices without audiofx simply keep playing without
+     * effects.
+     */
+    private fun ensureEffects() {
+        val exo = player ?: return
+        val sessionId = try {
+            exo.audioSessionId
+        } catch (t: Throwable) {
+            0
+        }
+        if (sessionId <= 0) return
+        if (sessionId != effectsSessionId) {
+            releaseEffects()
+            effectsSessionId = sessionId
+            try {
+                val eq = Equalizer(0, sessionId)
+                equalizer = eq
+                val presetCount = eq.numberOfPresets.toInt()
+                state.eqPresets = (0 until presetCount).map { index ->
+                    try {
+                        eq.getPresetName(index.toShort())
+                            .ifBlank { getString(R.string.music_eq_preset_name, index + 1) }
+                    } catch (t: Throwable) {
+                        getString(R.string.music_eq_preset_name, index + 1)
+                    }
+                }
+            } catch (t: Throwable) {
+                equalizer = null
+            }
+            try {
+                bassBoost = BassBoost(0, sessionId)
+            } catch (t: Throwable) {
+                bassBoost = null
+            }
+            try {
+                virtualizer = Virtualizer(0, sessionId)
+            } catch (t: Throwable) {
+                virtualizer = null
+            }
+        }
+        applyEqMode()
+    }
+
+    /** Applies MusicAppearance.eqMode to the live effects, disabling the rest. */
+    private fun applyEqMode() {
+        try {
+            equalizer?.enabled = false
+        } catch (t: Throwable) {
+        }
+        try {
+            bassBoost?.enabled = false
+        } catch (t: Throwable) {
+        }
+        try {
+            virtualizer?.enabled = false
+        } catch (t: Throwable) {
+        }
+        val mode = MusicAppearance.eqMode
+        try {
+            when {
+                mode == MusicAppearance.EQ_BASS -> {
+                    bassBoost?.let { boost ->
+                        boost.strength = EQ_EFFECT_STRENGTH
+                        boost.enabled = true
+                    }
+                }
+
+                mode == MusicAppearance.EQ_SURROUND -> {
+                    virtualizer?.let { virt ->
+                        if (virt.strengthSupported) {
+                            virt.strength = EQ_EFFECT_STRENGTH
+                        }
+                        virt.enabled = true
+                    }
+                }
+
+                else -> {
+                    val presetIndex = MusicAppearance.eqPresetIndex(mode)
+                    val eq = equalizer
+                    if (presetIndex != null && eq != null &&
+                        presetIndex in 0 until eq.numberOfPresets.toInt()
+                    ) {
+                        eq.usePreset(presetIndex.toShort())
+                        eq.enabled = true
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            // audiofx rejected the change: stay silent, playback continues.
+        }
+    }
+
+    private fun releaseEffects() {
+        try {
+            equalizer?.release()
+        } catch (t: Throwable) {
+        }
+        try {
+            bassBoost?.release()
+        } catch (t: Throwable) {
+        }
+        try {
+            virtualizer?.release()
+        } catch (t: Throwable) {
+        }
+        equalizer = null
+        bassBoost = null
+        virtualizer = null
+        effectsSessionId = 0
+    }
+
     override fun onDestroy() {
         tickerJob?.cancel()
         resolveJob?.cancel()
         lyricJob?.cancel()
+        releaseEffects()
         player?.release()
         player = null
         super.onDestroy()

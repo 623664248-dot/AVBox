@@ -346,3 +346,33 @@ lyricLines 数据与 MusicLrc 解析，不新造管线。沉浸模式保留最�
   `ui.input.pointer` 包的扩展函数，import 必须保留。
 - 修复：补上两个 gestures import 与 positionChange import，
   删除 changedToCanceled 分支——取消手势与抬手走同一结束路径。
+
+## v1.10.0 播放页 / 音乐页 RikkaHub 式界面 + 音效切换
+
+- 新增共享外观设置（ui/music/MusicAppearance.kt）：自定义背景图
+  （OpenDocument 选图后复制到 filesDir/music_bg/ 持久保存）、模糊
+  半径 0–40（默认 18）、黑色遮罩不透明度 0–90%（默认 55%）、音效
+  模式，全部经 KV 持久化（读值一律传 "" 默认，沿用 v1.9.0 教训），
+  状态走 Compose 快照状态，Sheet 里拖动滑杆页面当场预览。
+- 播放页（LxMusicPlayerScreen）：根布局改 Box，底层 MusicBackground
+  （自定义图优先，否则当前封面，full-bleed Crop + blur + 黑色遮罩），
+  封面卡 / 歌词区 / 进度控制区改白色低 alpha 毛玻璃 Surface，文字与
+  图标改白色系；顶栏队列按钮左侧加调色板按钮打开外观 Sheet（背景
+  + 音效两节）。点封面沉浸歌词、队列、上下首等行为不变。
+- 音效（LxMusicPlayerActivity）：android.media.audiofx 的
+  Equalizer / BassBoost / Virtualizer 挂 ExoPlayer 的 audio session，
+  player 备好（STATE_READY / prepare 后）与 session 变化时重挂，选
+  择在 Sheet 里点下即由 Activity 重新应用；预设名运行时从设备
+  Equalizer 枚举（numberOfPresets / getPresetName）。模式存 KV 字
+  符串：off / preset:<index> / bass / surround（低音、环绕 strength
+  均 700/1000）。全部 try/catch 包裹，设备不支持 audiofx 时静默降
+  级，不影响播放。Manifest 补 MODIFY_AUDIO_SETTINGS（普通权限）。
+- 音乐页（MusicPage）：根布局外包一层 Box，设了自定义背景图时底
+  层铺 MusicBackground（同 blur + 遮罩），榜单卡片 / 歌曲行 / 搜
+  索框改半透 Surface 让背景透出，未设置时外观与之前完全一致；
+  [搜索|排行榜] 行右端加调色板图标按钮打开外观 Sheet（仅背景节）。
+  悬浮音源按钮的位置 / 拖动 / 点击逻辑未动。
+- 已知限制：Modifier.blur 需 API 31+ 才有效果，低版本自动 no-op
+  （不引第三方库）；EQ 依赖设备 audiofx 支持，部分设备可能无预设
+  或效果创建失败，此时音效节只剩原声可选、播放不受影响；背景图
+  每次重选会替换旧图（旧文件自动清理）。

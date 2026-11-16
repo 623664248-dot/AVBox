@@ -22,6 +22,9 @@ class LxPlayerState {
     var errorText by mutableStateOf<String?>(null)
     var showQueue by mutableStateOf(false)
 
+    /** Device EQ preset names enumerated by the Activity (empty = no audiofx). */
+    var eqPresets by mutableStateOf<List<String>>(emptyList())
+
     val current: MusicTrack?
         get() = queue.getOrNull(index)
 }

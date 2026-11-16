@@ -92,6 +92,9 @@ import com.github.avbox.osc.music.MusicChart
 import com.github.avbox.osc.music.MusicTrack
 import com.github.avbox.osc.ui.components.AVBoxAlertDialog
 import com.github.avbox.osc.ui.music.LxMusicPlayerActivity
+import com.github.avbox.osc.ui.music.MusicAppearance
+import com.github.avbox.osc.ui.music.MusicAppearanceSheet
+import com.github.avbox.osc.ui.music.MusicBackground
 import com.github.avbox.osc.util.KV
 import kotlin.math.roundToInt
 
@@ -120,6 +123,7 @@ fun MusicPage(
 
     var query by rememberSaveable { mutableStateOf("") }
     var scriptDialogOpen by remember { mutableStateOf(false) }
+    var appearanceOpen by remember { mutableStateOf(false) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     var fabOffset by remember { mutableStateOf(readSavedFabOffset()) }
 
@@ -137,6 +141,12 @@ fun MusicPage(
         }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Custom background (when set) spans the whole page; the content
+        // box below keeps its original insets and FAB bounds measurement.
+        if (MusicAppearance.bgPath.isNotBlank()) {
+            MusicBackground(fallbackModel = null)
+        }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -168,10 +178,13 @@ fun MusicPage(
                 }
             }
 
-            // Second row: search / charts mode switch.
+            // Second row: search / charts mode switch, appearance at the end.
             Row(
-                modifier = Modifier.padding(top = 8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 FilterChip(
                     selected = mode == MusicMode.SEARCH,
@@ -183,6 +196,13 @@ fun MusicPage(
                     onClick = { vm.selectMode(MusicMode.CHARTS) },
                     label = { Text(stringResource(R.string.music_tab_charts)) },
                 )
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { appearanceOpen = true }) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_settings_theme),
+                        contentDescription = stringResource(R.string.music_appearance),
+                    )
+                }
             }
 
             BackHandler(enabled = mode == MusicMode.CHARTS && selectedChart != null) {
@@ -324,6 +344,7 @@ fun MusicPage(
             onClick = { scriptDialogOpen = true },
         )
     }
+    }
 
     if (scriptDialogOpen) {
         AVBoxAlertDialog(
@@ -390,6 +411,13 @@ fun MusicPage(
             },
         )
     }
+
+    if (appearanceOpen) {
+        MusicAppearanceSheet(
+            onDismissRequest = { appearanceOpen = false },
+            showEqSection = false,
+        )
+    }
 }
 
 /**
@@ -409,7 +437,11 @@ private fun MusicSearchField(
             .fillMaxWidth()
             .height(46.dp),
         shape = CircleShape,
-        color = Color.Transparent,
+        color = if (MusicAppearance.bgPath.isNotBlank()) {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
+        } else {
+            Color.Transparent
+        },
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {
         Row(
@@ -457,8 +489,35 @@ private fun MusicSearchField(
 
 @Composable
 private fun MusicTrackRow(track: MusicTrack, onClick: () -> Unit) {
+    // With a custom page background the row sits on a translucent surface
+    // so the artwork shows through; without one the layout is unchanged.
+    if (MusicAppearance.bgPath.isNotBlank()) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.45f),
+        ) {
+            TrackRowContent(
+                track = track,
+                onClick = onClick,
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
+        }
+    } else {
+        TrackRowContent(track = track, onClick = onClick)
+    }
+}
+
+@Composable
+private fun TrackRowContent(
+    track: MusicTrack,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(vertical = 8.dp),
@@ -601,35 +660,55 @@ private fun ChartsContent(
 
 @Composable
 private fun MusicChartCard(chart: MusicChart, onClick: () -> Unit) {
-    Column(
+    // With a custom page background the card gets a translucent surface so
+    // the artwork shows through; without one it stays fully transparent.
+    val hasBg = MusicAppearance.bgPath.isNotBlank()
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = if (hasBg) {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+        } else {
+            Color.Transparent
+        },
     ) {
-        AsyncImage(
-            model = chart.cover,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(12.dp)),
-        )
-        Text(
-            text = chart.name,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 6.dp),
-        )
-        if (chart.updateTip.isNotEmpty()) {
-            Text(
-                text = chart.updateTip,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+        Column(modifier = Modifier.fillMaxWidth()) {
+            AsyncImage(
+                model = chart.cover,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(12.dp)),
             )
+            Text(
+                text = chart.name,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(
+                    top = 6.dp,
+                    start = if (hasBg) 8.dp else 0.dp,
+                    end = if (hasBg) 8.dp else 0.dp,
+                ),
+            )
+            if (chart.updateTip.isNotEmpty()) {
+                Text(
+                    text = chart.updateTip,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(
+                        start = if (hasBg) 8.dp else 0.dp,
+                        end = if (hasBg) 8.dp else 0.dp,
+                        bottom = if (hasBg) 8.dp else 0.dp,
+                    ),
+                )
+            }
         }
     }
 }
