@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.github.avbox.osc.R
 import com.github.avbox.osc.music.LxBridge
+import com.github.avbox.osc.music.LxFavorites
 import com.github.avbox.osc.music.LxUserScripts
 import com.github.avbox.osc.music.MusicApi
 import com.github.avbox.osc.music.MusicChart
@@ -22,8 +23,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Music tab content mode: platform search or per-platform charts. */
-enum class MusicMode { SEARCH, CHARTS }
+/** Music tab content mode: platform search, per-platform charts, favourites. */
+enum class MusicMode { SEARCH, CHARTS, FAVORITES }
 
 /**
  * Music tab state: owns the LX source bridge lifecycle (built-in scripts
@@ -74,6 +75,9 @@ class MusicViewModel : ViewModel() {
 
     private val _chartsLoading = MutableStateFlow(false)
     val chartsLoading: StateFlow<Boolean> = _chartsLoading.asStateFlow()
+
+    private val _favorites = MutableStateFlow<List<MusicTrack>>(emptyList())
+    val favorites: StateFlow<List<MusicTrack>> = _favorites.asStateFlow()
 
     private val _chartSongsLoading = MutableStateFlow(false)
     val chartSongsLoading: StateFlow<Boolean> = _chartSongsLoading.asStateFlow()
@@ -318,6 +322,12 @@ class MusicViewModel : ViewModel() {
         if (mode == _mode.value) return
         _mode.value = mode
         if (mode == MusicMode.CHARTS) loadCharts()
+        if (mode == MusicMode.FAVORITES) loadFavorites()
+    }
+
+    /** Reloads the favourite list; the player page may have changed it. */
+    fun loadFavorites() {
+        _favorites.value = LxFavorites.load()
     }
 
     /** (Re)loads the chart catalog of the selected platform. */

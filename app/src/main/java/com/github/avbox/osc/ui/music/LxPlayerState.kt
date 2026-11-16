@@ -1,11 +1,37 @@
 package com.github.avbox.osc.ui.music
 
+import androidx.annotation.StringRes
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
+import com.github.avbox.osc.R
 import com.github.avbox.osc.music.MusicTrack
+
+/** Queue advance behaviour of the LX player, cycled by its loop button. */
+enum class LxLoopMode(@StringRes val labelRes: Int) {
+    LIST(R.string.music_mode_list),
+    SINGLE(R.string.music_mode_single),
+    SHUFFLE(R.string.music_mode_shuffle),
+    ORDER(R.string.music_mode_order);
+
+    fun next(): LxLoopMode = when (this) {
+        LIST -> SINGLE
+        SINGLE -> SHUFFLE
+        SHUFFLE -> ORDER
+        ORDER -> LIST
+    }
+
+    companion object {
+        fun fromName(name: String?): LxLoopMode =
+            entries.firstOrNull { it.name == name } ?: LIST
+    }
+}
+
+/** Download progress of the current track, driven by the Activity. */
+enum class LxDownloadStatus { IDLE, DOWNLOADING, DONE }
 
 /**
  * UI state for the standalone LX music player (same state-container form as
@@ -24,6 +50,30 @@ class LxPlayerState {
 
     /** Device EQ preset names enumerated by the Activity (empty = no audiofx). */
     var eqPresets by mutableStateOf<List<String>>(emptyList())
+
+    /** Queue advance behaviour; persisted by the Activity in KV. */
+    var loopMode by mutableStateOf(LxLoopMode.LIST)
+
+    /** Whether the current track is in the user's favourites. */
+    var isFavorite by mutableStateOf(false)
+
+    /** Resolved direct URL of the current track (null while resolving). */
+    var currentUrl by mutableStateOf<String?>(null)
+
+    /** Display-ready quality of the resolved URL ("320K"), "" when unknown. */
+    var qualityText by mutableStateOf("")
+
+    /**
+     * Page background colour sampled from the current cover (already
+     * darkened); null until extraction succeeds, the screen then falls
+     * back to a deep blue-grey.
+     */
+    var bgColor by mutableStateOf<Color?>(null)
+
+    var downloadStatus by mutableStateOf(LxDownloadStatus.IDLE)
+
+    /** 0..100 while downloading; -1 when the total size is unknown. */
+    var downloadPercent by mutableIntStateOf(-1)
 
     val current: MusicTrack?
         get() = queue.getOrNull(index)

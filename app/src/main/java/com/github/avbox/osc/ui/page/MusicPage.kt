@@ -120,6 +120,7 @@ fun MusicPage(
     val selectedChart by vm.selectedChart.collectAsStateWithLifecycle()
     val chartsLoading by vm.chartsLoading.collectAsStateWithLifecycle()
     val chartSongsLoading by vm.chartSongsLoading.collectAsStateWithLifecycle()
+    val favorites by vm.favorites.collectAsStateWithLifecycle()
 
     var query by rememberSaveable { mutableStateOf("") }
     var scriptDialogOpen by remember { mutableStateOf(false) }
@@ -178,7 +179,8 @@ fun MusicPage(
                 }
             }
 
-            // Second row: search / charts mode switch, appearance at the end.
+            // Second row: search / charts / favourites mode switch,
+            // appearance at the end.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -196,6 +198,11 @@ fun MusicPage(
                     onClick = { vm.selectMode(MusicMode.CHARTS) },
                     label = { Text(stringResource(R.string.music_tab_charts)) },
                 )
+                FilterChip(
+                    selected = mode == MusicMode.FAVORITES,
+                    onClick = { vm.selectMode(MusicMode.FAVORITES) },
+                    label = { Text(stringResource(R.string.music_favorites_title)) },
+                )
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = { appearanceOpen = true }) {
                     Icon(
@@ -210,7 +217,18 @@ fun MusicPage(
             }
 
             Box(modifier = Modifier.fillMaxSize()) {
-                if (mode == MusicMode.CHARTS) {
+                if (mode == MusicMode.FAVORITES) {
+                    FavoritesContent(
+                        favorites = favorites,
+                        onPlayFavorite = { index ->
+                            LxMusicPlayerActivity.start(
+                                context,
+                                MusicTrack.listToJson(favorites),
+                                index,
+                            )
+                        },
+                    )
+                } else if (mode == MusicMode.CHARTS) {
                     ChartsContent(
                         charts = charts,
                         chartSongs = chartSongs,
@@ -554,6 +572,35 @@ private fun TrackRowContent(
                 text = track.intervalText,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FavoritesContent(
+    favorites: List<MusicTrack>,
+    onPlayFavorite: (Int) -> Unit,
+) {
+    if (favorites.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Text(
+                text = stringResource(R.string.music_favorites_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+        return
+    }
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        itemsIndexed(
+            favorites,
+            key = { index, _ -> index },
+        ) { index, track ->
+            MusicTrackRow(
+                track = track,
+                onClick = { onPlayFavorite(index) },
             )
         }
     }

@@ -252,6 +252,15 @@
     <string name="music_eq_bass">低音增强</string>
     <string name="music_eq_surround">环绕</string>
     <string name="music_eq_preset_name">预设 %1$d</string>
+    <string name="music_mode_shuffle">随机播放</string>
+    <string name="music_favorites_title">我的收藏</string>
+    <string name="music_favorites_empty">暂无收藏</string>
+    <string name="music_favorite_add">收藏</string>
+    <string name="music_favorite_remove">取消收藏</string>
+    <string name="music_download">下载</string>
+    <string name="music_downloaded">已下载</string>
+    <string name="music_download_done_toast">已下载到 %1$s</string>
+    <string name="music_download_failed">下载失败</string>
     <string name="tab_mine">我的</string>
     <string name="weekday_mon">周一</string>
     <string name="weekday_tue">周二</string>

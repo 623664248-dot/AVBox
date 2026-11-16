@@ -252,6 +252,15 @@
     <string name="music_eq_bass">Bass boost</string>
     <string name="music_eq_surround">Surround</string>
     <string name="music_eq_preset_name">Preset %1$d</string>
+    <string name="music_mode_shuffle">Shuffle</string>
+    <string name="music_favorites_title">My favourites</string>
+    <string name="music_favorites_empty">No favourites yet</string>
+    <string name="music_favorite_add">Add to favourites</string>
+    <string name="music_favorite_remove">Remove from favourites</string>
+    <string name="music_download">Download</string>
+    <string name="music_downloaded">Downloaded</string>
+    <string name="music_download_done_toast">Downloaded to %1$s</string>
+    <string name="music_download_failed">Download failed</string>
     <string name="tab_mine">Me</string>
     <string name="weekday_mon">Mon</string>
     <string name="weekday_tue">Tue</string>

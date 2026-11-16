@@ -1,11 +1,18 @@
 package com.github.avbox.osc.ui.music
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer
 import android.media.audiofx.Virtualizer
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.widget.Toast
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.AudioAttributes
@@ -14,17 +21,32 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import coil3.SingletonImageLoader
+import coil3.request.ImageRequest
+import coil3.request.SuccessResult
+import coil3.toBitmap
 import com.github.avbox.osc.R
 import com.github.avbox.osc.music.LxBridge
+import com.github.avbox.osc.music.LxFavorites
 import com.github.avbox.osc.music.MusicApi
 import com.github.avbox.osc.music.MusicTrack
+import com.github.avbox.osc.net.HttpClients
 import com.github.avbox.osc.ui.base.BaseActivity
 import com.github.avbox.osc.ui.components.SheetHostScaffold
 import com.github.avbox.osc.ui.theme.AVBoxTheme
 import com.github.avbox.osc.ui.theme.enableTransparentEdgeToEdge
+import com.github.avbox.osc.util.KV
+import java.io.File
+import java.io.FileOutputStream
+import java.io.OutputStream
+import kotlin.random.Random
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 /**
  * Standalone music player for the music tab: plays the search-result queue
@@ -38,6 +60,9 @@ class LxMusicPlayerActivity : BaseActivity() {
     companion object {
         private const val EXTRA_QUEUE = "lx_queue"
         private const val EXTRA_INDEX = "lx_index"
+
+        /** KV key for the persisted loop mode (LxLoopMode name). */
+        private const val KV_LOOP_MODE = "lx_loop_mode"
 
         /** AudioFX strength scale is 0..1000; 700 is a clearly audible boost. */
         private const val EQ_EFFECT_STRENGTH: Short = 700
@@ -56,6 +81,8 @@ class LxMusicPlayerActivity : BaseActivity() {
     private var resolveJob: Job? = null
     private var lyricJob: Job? = null
     private var tickerJob: Job? = null
+    private var colorJob: Job? = null
+    private var downloadJob: Job? = null
 
     // Sound effects (AudioFX) attached to the player's audio session. Any
     // of them may be null on devices without audiofx support; every use is
@@ -78,6 +105,10 @@ class LxMusicPlayerActivity : BaseActivity() {
         }
         state.queue = queue
         state.index = (intent?.getIntExtra(EXTRA_INDEX, 0) ?: 0).coerceIn(0, queue.size - 1)
+        // The "" default matters: KV returns null for unregistered keys
+        // when no default is given (the v1.9.0 music-import bug).
+        val savedLoopMode: String = KV.get(KV_LOOP_MODE, "")
+        state.loopMode = LxLoopMode.fromName(savedLoopMode)
         buildPlayer()
         findViewById<ComposeView>(R.id.compose_view).setContent {
             AVBoxTheme {
@@ -86,7 +117,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                         state = state,
                         onBack = { finish() },
                         onTogglePlay = { togglePlay() },
-                        onNext = { playAt(state.index + 1) },
+                        onNext = { playNextManual() },
                         onPrev = { playAt(state.index - 1) },
                         onSeek = { ms -> player?.seekTo(ms) },
                         onToggleQueue = { state.showQueue = !state.showQueue },
@@ -95,6 +126,9 @@ class LxMusicPlayerActivity : BaseActivity() {
                             playAt(i)
                         },
                         onEqModeSelected = { ensureEffects() },
+                        onToggleLoopMode = { toggleLoopMode() },
+                        onToggleFavorite = { toggleFavorite() },
+                        onDownload = { downloadCurrent() },
                     )
                 }
             }
@@ -122,6 +156,11 @@ class LxMusicPlayerActivity : BaseActivity() {
                 .build(),
             true,
         )
+        exo.repeatMode = if (state.loopMode == LxLoopMode.SINGLE) {
+            Player.REPEAT_MODE_ONE
+        } else {
+            Player.REPEAT_MODE_OFF
+        }
         exo.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 state.buffering = playbackState == Player.STATE_BUFFERING
@@ -129,7 +168,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                     ensureEffects()
                 }
                 if (playbackState == Player.STATE_ENDED) {
-                    playAt(state.index + 1)
+                    advanceAuto()
                 }
             }
 
@@ -156,11 +195,21 @@ class LxMusicPlayerActivity : BaseActivity() {
         state.positionMs = 0L
         state.durationMs = 0L
         state.buffering = true
+        state.currentUrl = null
+        state.qualityText = ""
+        state.downloadStatus = LxDownloadStatus.IDLE
+        state.downloadPercent = -1
+        state.isFavorite = LxFavorites.isFavorite(track)
+        updateCoverColor(track)
         resolveJob?.cancel()
         resolveJob = lifecycleScope.launch {
             try {
                 val url = LxBridge.getMusicUrl(track)
                 val exo = player ?: return@launch
+                if (state.index == index) {
+                    state.currentUrl = url
+                    state.qualityText = LxBridge.lastResolvedQuality()?.uppercase() ?: ""
+                }
                 exo.setMediaItem(MediaItem.fromUri(url))
                 exo.prepare()
                 ensureEffects()
@@ -189,6 +238,289 @@ class LxMusicPlayerActivity : BaseActivity() {
         } else {
             exo.play()
         }
+    }
+
+    // ------------------------------------------------------------ loop mode
+
+    /**
+     * Automatic advance when a track ends. Single-loop never lands here
+     * (the player's REPEAT_MODE_ONE loops in place); sequential playback
+     * stops at the end of the queue instead of wrapping.
+     */
+    private fun advanceAuto() {
+        when (state.loopMode) {
+            LxLoopMode.SINGLE -> playAt(state.index)
+            LxLoopMode.ORDER -> {
+                if (state.index < state.queue.size - 1) {
+                    playAt(state.index + 1)
+                }
+            }
+
+            LxLoopMode.SHUFFLE -> playAt(randomIndex())
+            LxLoopMode.LIST -> playAt(state.index + 1)
+        }
+    }
+
+    /** Manual "next" button: random pick in shuffle mode, else next track. */
+    private fun playNextManual() {
+        if (state.loopMode == LxLoopMode.SHUFFLE) {
+            playAt(randomIndex())
+        } else {
+            playAt(state.index + 1)
+        }
+    }
+
+    private fun randomIndex(): Int {
+        val size = state.queue.size
+        if (size <= 1) return state.index
+        var next = Random.nextInt(size)
+        while (next == state.index) {
+            next = Random.nextInt(size)
+        }
+        return next
+    }
+
+    private fun toggleLoopMode() {
+        val mode = state.loopMode.next()
+        state.loopMode = mode
+        KV.put(KV_LOOP_MODE, mode.name)
+        player?.repeatMode = if (mode == LxLoopMode.SINGLE) {
+            Player.REPEAT_MODE_ONE
+        } else {
+            Player.REPEAT_MODE_OFF
+        }
+        Toast.makeText(this, getString(mode.labelRes), Toast.LENGTH_SHORT).show()
+    }
+
+    // ------------------------------------------------------------ favorites
+
+    private fun toggleFavorite() {
+        val track = state.current ?: return
+        state.isFavorite = LxFavorites.toggle(track)
+    }
+
+    // ------------------------------------------------------------ cover color
+
+    /**
+     * Samples the current cover's average colour (darkened) as the page
+     * background. Coil fetches a tiny copy, so the pixel walk is trivial;
+     * any failure leaves state.bgColor null and the screen uses its
+     * fallback colour.
+     */
+    private fun updateCoverColor(track: MusicTrack) {
+        colorJob?.cancel()
+        val url = track.img
+        if (url.isNullOrBlank()) {
+            state.bgColor = null
+            return
+        }
+        colorJob = lifecycleScope.launch {
+            val color = extractAverageColor(url)
+            if (state.current == track) {
+                state.bgColor = color
+            }
+        }
+    }
+
+    private suspend fun extractAverageColor(url: String): Color? {
+        return try {
+            val request = ImageRequest.Builder(this)
+                .data(url)
+                .size(48, 48)
+                .allowHardware(false)
+                .build()
+            val result = SingletonImageLoader.get(this).execute(request)
+            val bitmap = (result as? SuccessResult)?.image?.toBitmap() ?: return null
+            averageDarkenedColor(bitmap)
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    private fun averageDarkenedColor(bitmap: Bitmap): Color? {
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width <= 0 || height <= 0) return null
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        var red = 0L
+        var green = 0L
+        var blue = 0L
+        var count = 0L
+        for (pixel in pixels) {
+            if (android.graphics.Color.alpha(pixel) < 16) continue
+            red += android.graphics.Color.red(pixel)
+            green += android.graphics.Color.green(pixel)
+            blue += android.graphics.Color.blue(pixel)
+            count++
+        }
+        if (count == 0L) return null
+        // Halving the channels lands most covers in a deep, readable range
+        // for white text while keeping the cover's hue recognisable.
+        val factor = 0.5f
+        return Color(
+            red = (red / count * factor).toInt().coerceIn(0, 255),
+            green = (green / count * factor).toInt().coerceIn(0, 255),
+            blue = (blue / count * factor).toInt().coerceIn(0, 255),
+        )
+    }
+
+    // ------------------------------------------------------------ download
+
+    /**
+     * Downloads the current track's audio file into the device music
+     * library. Uses the already-resolved URL when available; otherwise
+     * resolves first through the same LX flow as playback.
+     */
+    private fun downloadCurrent() {
+        val track = state.current ?: return
+        if (state.downloadStatus == LxDownloadStatus.DOWNLOADING) return
+        state.downloadStatus = LxDownloadStatus.DOWNLOADING
+        state.downloadPercent = -1
+        downloadJob?.cancel()
+        downloadJob = lifecycleScope.launch {
+            try {
+                val url = state.currentUrl ?: LxBridge.getMusicUrl(track)
+                val savedTo = withContext(Dispatchers.IO) {
+                    downloadToLibrary(track, url) { percent ->
+                        state.downloadPercent = percent
+                    }
+                }
+                if (state.current == track) {
+                    state.downloadStatus = LxDownloadStatus.DONE
+                    state.downloadPercent = 100
+                }
+                Toast.makeText(
+                    this@LxMusicPlayerActivity,
+                    getString(R.string.music_download_done_toast, savedTo),
+                    Toast.LENGTH_LONG,
+                ).show()
+            } catch (e: Exception) {
+                if (state.current == track) {
+                    state.downloadStatus = LxDownloadStatus.IDLE
+                    state.downloadPercent = -1
+                }
+                Toast.makeText(
+                    this@LxMusicPlayerActivity,
+                    getString(R.string.music_download_failed),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    /**
+     * Streams [url] to the music library and returns a display path.
+     * API 29+ goes through MediaStore (Music/AVBox, no permission needed);
+     * older versions write into the app's external Music dir. Blocking IO:
+     * call on a background dispatcher.
+     */
+    private fun downloadToLibrary(
+        track: MusicTrack,
+        url: String,
+        onProgress: (Int) -> Unit,
+    ): String {
+        val extension = extensionOf(url)
+        val fileName = cleanFileName(track, extension)
+        val client = HttpClients.defaultClient ?: OkHttpClient()
+        val request = Request.Builder().url(url).build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IllegalStateException("HTTP " + response.code)
+            }
+            val body = response.body ?: throw IllegalStateException("empty body")
+            val total = body.contentLength()
+            val sink: OutputStream
+            val displayPath: String
+            var mediaUri: Uri? = null
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Audio.Media.DISPLAY_NAME, fileName)
+                    put(MediaStore.Audio.Media.MIME_TYPE, mimeTypeOf(extension))
+                    put(MediaStore.Audio.Media.RELATIVE_PATH, "Music/AVBox")
+                    put(MediaStore.Audio.Media.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    values,
+                ) ?: throw IllegalStateException("MediaStore insert failed")
+                mediaUri = uri
+                sink = contentResolver.openOutputStream(uri)
+                    ?: throw IllegalStateException("MediaStore open failed")
+                displayPath = "Music/AVBox/" + fileName
+            } else {
+                val dir = getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: filesDir
+                if (!dir.exists()) dir.mkdirs()
+                val file = File(dir, fileName)
+                sink = FileOutputStream(file)
+                displayPath = file.absolutePath
+            }
+            try {
+                sink.use { output ->
+                    body.byteStream().use { input ->
+                        val buffer = ByteArray(8192)
+                        var readTotal = 0L
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                            readTotal += read
+                            if (total > 0) {
+                                onProgress((readTotal * 100 / total).toInt().coerceIn(0, 99))
+                            }
+                        }
+                    }
+                }
+                val uri = mediaUri
+                if (uri != null) {
+                    val done = ContentValues().apply {
+                        put(MediaStore.Audio.Media.IS_PENDING, 0)
+                    }
+                    contentResolver.update(uri, done, null, null)
+                }
+            } catch (e: Exception) {
+                val uri = mediaUri
+                if (uri != null) {
+                    try {
+                        contentResolver.delete(uri, null, null)
+                    } catch (t: Throwable) {
+                        // best effort cleanup of the pending entry
+                    }
+                }
+                throw e
+            }
+            return displayPath
+        }
+    }
+
+    private fun extensionOf(url: String): String {
+        val path = url.substringBefore('?').substringBefore('#')
+        val ext = path.substringAfterLast('.', "").lowercase()
+        val known = setOf("mp3", "m4a", "aac", "flac", "ogg", "opus", "wav")
+        return if (ext in known) ext else "mp3"
+    }
+
+    private fun mimeTypeOf(extension: String): String {
+        return when (extension) {
+            "m4a" -> "audio/mp4"
+            "aac" -> "audio/aac"
+            "flac" -> "audio/flac"
+            "ogg" -> "audio/ogg"
+            "opus" -> "audio/opus"
+            "wav" -> "audio/x-wav"
+            else -> "audio/mpeg"
+        }
+    }
+
+    private fun cleanFileName(track: MusicTrack, extension: String): String {
+        val raw = (track.singer + " - " + track.name).trim()
+        val cleaned = raw
+            .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            .replace(Regex("[\\x00-\\x1F]"), "_")
+            .trim()
+            .take(120)
+        val base = cleaned.ifEmpty { "music" }
+        return base + "." + extension
     }
 
     /**
@@ -312,6 +644,8 @@ class LxMusicPlayerActivity : BaseActivity() {
         tickerJob?.cancel()
         resolveJob?.cancel()
         lyricJob?.cancel()
+        colorJob?.cancel()
+        downloadJob?.cancel()
         releaseEffects()
         player?.release()
         player = null

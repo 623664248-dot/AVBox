@@ -174,13 +174,25 @@ object LxBridge {
     suspend fun getMusicUrl(track: MusicTrack, quality: String = "320k"): String {
         var lastError: String? = null
         val first = tryMusicUrl(track, quality) { lastError = it }
-        if (first != null) return first
+        if (first != null) {
+            resolvedQuality = quality
+            return first
+        }
         if (quality != "128k") {
             val fallback = tryMusicUrl(track, "128k") { lastError = it }
-            if (fallback != null) return fallback
+            if (fallback != null) {
+                resolvedQuality = "128k"
+                return fallback
+            }
         }
         throw LxException(lastError ?: "获取播放链接失败")
     }
+
+    @Volatile
+    private var resolvedQuality: String? = null
+
+    /** Quality that produced the most recent successful [getMusicUrl]. */
+    fun lastResolvedQuality(): String? = resolvedQuality
 
     private suspend fun tryMusicUrl(
         track: MusicTrack,

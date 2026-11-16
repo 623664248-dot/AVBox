@@ -396,3 +396,89 @@ lyricLines 数据与 MusicLrc 解析，不新造管线。沉浸模式保留最�
 - 修复：四个函数改名为 `updateBgPath/updateBlurDp/
   updateScrimPercent/updateEqMode`，同文件内 5 处调用同步改名；
   无其他文件引用这些函数。
+
+## v1.11.0 酷狗式播放页 + 循环 / 收藏 / 下载
+
+### 播放页排版（ui/music/LxMusicPlayerScreen.kt 重排）
+
+参照酷狗播放页改为自上而下的单列布局：
+
+- 顶栏只剩返回（左）与调色板按钮（右，打开原有外观 + 音效 Sheet）；
+  播放队列按钮下移到控制行右端。
+- 背景：未设自定义背景图时改为封面取色的纯色深色背景（见下），
+  底部叠一道渐变压暗保可读性；已设自定义背景图时仍用 v1.10.0 的
+  MusicBackground（模糊 + 遮罩），优先级更高。文字保持白色系。
+- 大封面：圆角正方形（BoxWithConstraints 取区域内最大正方形），
+  点封面仍进沉浸歌词；其下是加粗歌名、歌手名、一行小标签 chip
+  （平台名 + 已知音质如 320K；音质未知时不显示，不仿造 VIP/DTS
+  等标签）。
+- 两行歌词（当前行白字 + 下一行半透），点歌词区同样进沉浸歌词；
+  原来的整列歌词区与三块毛玻璃卡片移除（沉浸歌词不变）。
+- 操作行：收藏（爱心）与下载两键居中分布；进度条改为细条 Slider
+  与当前 / 总时长同行；控制行 = 循环模式（左）+ 上一首 / 播放暂停
+  / 下一首（中）+ 播放队列（右）。
+
+### 封面取色
+
+项目无 androidx.palette 依赖，取色手写：Activity 在切歌时用 Coil
+（SingletonImageLoader）以 48×48、allowHardware(false) 拉封面
+bitmap，遍历像素求平均色（跳过近透明像素），各通道 ×0.5 压暗后
+写入 LxPlayerState.bgColor；全程 try/catch，失败或无封面时页面用
+深蓝灰兜底色 0xFF262833。取色结果只跟当前歌曲走，切歌自动重取。
+
+### 循环模式（LxLoopMode，四档）
+
+列表循环 → 单曲循环 → 随机播放 → 顺序播放，按钮点按轮换并
+toast 当前模式名，KV `lx_loop_mode` 持久化（读取带 "" 默认值）。
+与现有队列推进的衔接（队列推进仍统一走 Activity.playAt）：
+
+- 列表循环：沿用原行为，STATE_ENDED 时 playAt(index+1) 绕回。
+- 单曲循环：exo.repeatMode = REPEAT_MODE_ONE，播放器内部循环，
+  不触发自动切歌；切到其它模式即恢复 REPEAT_MODE_OFF。
+- 随机播放：自动连播与手动「下一首」都在切歌时取随机下标
+  （队列 >1 首时避开当前曲）。
+- 顺序播放：自动连播在队尾停止（不绕回）；手动下一首仍可翻页。
+
+### 收藏（music/LxFavorites.kt）
+
+收藏列表以 MusicTrack JSON 数组存 KV `lx_favorites`（读写带 ""
+默认），身份键为 source+songmid（无 id 时回退歌名+歌手），存的
+字段与播放队列一致，收藏里点歌可直接播放。播放页爱心切换当前
+歌曲收藏（已收藏填充粉红，未收藏描边白），进页 / 切歌时按当前
+歌曲刷新状态。音乐页模式行新增第三个 chip「我的收藏」：
+FAVORITES 模式列出收藏歌曲，点歌播放（队列 = 收藏列表），空时
+显示「暂无收藏」；每次切入该模式都从 KV 重读，播放页里的增删
+回到音乐页即生效。
+
+### 下载
+
+播放页下载按钮把当前歌曲音频存入设备音乐库：优先用播放已解析
+的直链（LxPlayerState.currentUrl），未解析完则先走 LxBridge
+解析再下。文件名「歌手 - 歌名.<扩展名>」（扩展名从 URL 判，
+判不出用 mp3；非法字符清洗）。OkHttp 流式写入、后台协程执行，
+进度（百分比，总长未知时只转圈）回 LxPlayerState，按钮在下载
+中禁用防重复点，完成 / 失败均 toast。落盘策略：API 29+ 用
+MediaStore 写 Music/AVBox（RELATIVE_PATH，IS_PENDING 完成后
+清零，失败删条目），无需任何权限；API 29 以下写
+getExternalFilesDir(Music)，完成 toast 带完整路径。
+
+### 图标
+
+循环 / 单曲复用仓库已有 ic_repeat / ic_repeat_one；随机、顺序、
+收藏（填充 / 描边）、下载为新增 res/drawable 矢量图标
+（ic_shuffle / ic_play_order / ic_favorite / ic_favorite_border /
+ic_download，24dp viewport 的 Material 路径，与 ic_check 同款
+式），播放页全部图标统一走 painterResource，不新增 material
+图标符号依赖。音质 chip 的数据来自 LxBridge 新增的
+lastResolvedQuality()（记录最近一次 getMusicUrl 实际命中的
+音质，320k 失败回退 128k 时如实显示 128K）。
+
+### 已知限制
+
+- 取色是整幅封面的平均色，封面本身过亮 / 过杂时背景观感一般，
+  但已统一压暗一半，明暗极端时仍可改用自定义背景图。
+- 随机模式不记播放历史，「上一首」仍是队列上一首。
+- 下载不做断点续传，同一首重复下载会产生同名文件（MediaStore
+  自动改名）；下载完成状态只记当前歌曲，切歌即重置。
+- 收藏列表在音乐页切入「我的收藏」时刷新，停留在该模式时从
+  播放页返回不会自动刷新（切一下模式即可）。
