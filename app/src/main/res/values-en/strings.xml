@@ -223,6 +223,7 @@
     <string name="music_script_ready">Music source ready: %1$s</string>
     <string name="music_script_init_failed">Music source init failed: %1$s</string>
     <string name="music_script_not_ready">Music source is not ready yet</string>
+    <string name="music_no_source">No source yet. Tap the record button at the top left to add one.</string>
     <string name="music_hot_title">Hot searches</string>
     <string name="music_empty_result">No songs found</string>
     <string name="music_no_lyric">No lyrics</string>

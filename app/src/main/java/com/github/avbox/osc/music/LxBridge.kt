@@ -48,10 +48,12 @@ object LxBridge {
     class LxException(message: String) : Exception(message)
 
     /**
-     * A loadable source script: either a built-in asset ([assetPath]) or a
-     * user-imported file ([filePath], absolute path in the app's private
-     * storage). [version] is only filled for user scripts, from the import
-     * metadata; built-ins learn their version from the script header.
+     * A loadable source script. Since v1.15.0 only user-imported scripts
+     * exist ([filePath], absolute path in the app's private storage); the
+     * bundled lx_sources assets are no longer registered anywhere.
+     * [version] comes from the import metadata in [LxUserScripts].
+     * [assetPath] is kept for the loader's asset branch but no current
+     * def uses it.
      */
     data class ScriptDef(
         val id: String,
@@ -59,11 +61,6 @@ object LxBridge {
         val fallbackName: String,
         val filePath: String? = null,
         val version: String = "",
-    )
-
-    val SCRIPTS: List<ScriptDef> = listOf(
-        ScriptDef("xinghai", "lx_sources/xinghai.js", "星海音乐源"),
-        ScriptDef("quandouyao", "lx_sources/quandouyao.js", "全豆要聚合音源"),
     )
 
     data class ScriptInfo(

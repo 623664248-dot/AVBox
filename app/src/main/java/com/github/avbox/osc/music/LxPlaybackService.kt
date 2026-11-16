@@ -175,6 +175,7 @@ class LxPlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         MusicCrashLog.install(this)
+        MusicCrashLog.log(this, "svc: service onCreate")
         val exo = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpDataSourceFactory))
             .build()
@@ -212,7 +213,10 @@ class LxPlaybackService : MediaSessionService() {
 
     override fun onGetSession(
         controllerInfo: MediaSession.ControllerInfo,
-    ): MediaSession? = mediaSession
+    ): MediaSession? {
+        MusicCrashLog.log(this, "svc: onGetSession")
+        return mediaSession
+    }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val sessionPlayer = mediaSession?.player

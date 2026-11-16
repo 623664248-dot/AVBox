@@ -223,6 +223,7 @@
     <string name="music_script_ready">音源已就绪：%1$s</string>
     <string name="music_script_init_failed">音源脚本初始化失败：%1$s</string>
     <string name="music_script_not_ready">音源还没就绪，请稍候</string>
+    <string name="music_no_source">暂无音源，点左上角唱片按钮添加</string>
     <string name="music_hot_title">热搜榜</string>
     <string name="music_empty_result">没有找到相关歌曲</string>
     <string name="music_no_lyric">暂无歌词</string>

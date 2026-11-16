@@ -867,3 +867,145 @@ Python 引擎。
 - py 歌词匹配依赖平台搜索可用性与歌名清洗质量：同名不同曲、
   爬虫歌名严重变形时可能匹配不到（保持无歌词）或极少数配错，
   挑选规则已按「宁缺勿错」收紧。
+
+## v1.15.0 唱片音源按钮 + 内置音源撤下
+
+### 顶行：唱片按钮取代音符与悬浮按钮
+
+- 顶行左侧原 AnimatedMusicNote（上下浮动的音符图标）换成
+  VinylSourceButton：Canvas 自绘黑胶唱片——黑盘、三圈纹路
+  （同心圆细环）、一段浅色弧光、主题色中心标 + 偏心小白点、
+  中心孔；不用 emoji、不用外部图片。点击它打开与原悬浮按钮
+  同一个音源选择对话框。
+- 旋转条件：订阅 NowPlayingState 的 isPlaying——有歌在播时匀速
+  旋转（360°/6 秒，线性），暂停/无播放时静止。角度用
+  LaunchedEffect + withFrameMillis 逐帧累积（只在播放时累加），
+  播放状态切换时角度不清零、不跳变。
+- 唱片按钮与右侧外观（调色板）按钮统一为 TopRoundButton：40dp
+  圆形、1dp 浅色描边、半透明底（自定义背景图时沿用页面惯例
+  surface 0.45 alpha，否则 surfaceVariant 0.55 alpha）。顶行两端
+  按钮等宽（40dp）+ 等距 8dp 间隔，中间的搜索栏因此居中；搜索栏
+  本体（胶囊样式、IME 搜索、背景 alpha）未动。
+- 悬浮音源按钮 MusicSourceFab 整体移除，连同拖动手势与位置
+  持久化代码；KV 里已存的 music_source_fab_pos 不删除、只是不再
+  读取。迷你播放条与内容区 padding 不受影响。
+
+### 内置音源全部撤下
+
+- JS 侧：LxBridge.SCRIPTS 常量删除，星海（xinghai）、全豆要
+  （quandouyao）不再注册为可选/默认源。MusicViewModel 的
+  allDefs() 只剩用户导入脚本，findDef 改为可空。
+- py 侧：PyMusicSources.BUILTINS 删除，6 个内置 py 源不再释放、
+  不再出现在可选列表；loadDefs() 只返回用户导入，resolveFile()
+  简化为按 filePath 取文件（签名不变，PyMusicBridge 调用点不动）。
+- assets 里的 lx_sources/*.js 与 py_sources/*.py 文件保留在 APK
+  里（push-files 删不了文件），只是再没有任何代码引用它们。
+
+### 默认选择与无源空状态（新规则）
+
+- 启动顺序：记住的音源（lx_music_script_id）还存在就用它（py
+  走 activatePy、JS 走 initBridge）；不存在或加载失败时，按对话
+  框列表顺序（JS 用户源在前、py 用户源在后）试第一个能启动的
+  源（startFirstAvailable，跳过刚失败的记住源）。
+- 删除正在用的源后同样走 startFirstAvailable 兜底；无源可兜时
+  清空平台列表与记住值，进入空状态，不再指向已删除的 id。
+- 一个用户源都没有时（noSource 状态）：不初始化桥、不报错，
+  音乐页内容区居中显示「暂无音源，点左上角唱片按钮添加」
+  （music_no_source，四语）。此状态下搜索被 ViewModel 的空源
+  守卫挡下（toast 音源未就绪）、排行榜返回空列表，不会 NPE
+  或一直转圈。导入第一个源后自动切换过去、空状态解除。
+- savedScriptId() 不再回退到任何内置源：记住值无效时返回 ""。
+
+## v1.15.1 — 后台播放服务连接加固 + 列表底部留白
+
+### 背景
+
+v1.13.3 的后台播放真机（荣耀）从未接上：播放时通知栏无 AVBox
+媒体通知、退播放页即停、音乐页无迷你条。静态审计确认服务本体、
+清单注册、连接代码都没写错；最可疑的是连接预算太紧——播放页打开
+才冷启服务、只等 3 秒（SERVICE_CONNECT_TIMEOUT_MS=3000 /
+WAIT=3500），而 QuickJS/Python 初始化同时抢资源，超时后
+degradeToLocal 本会话永不重试，于是每次都落成本地播放。
+
+### 进程级预热连接（music/MusicServiceConnection.kt，新）
+
+- object 单例持有共享 MediaController 连接（构建 future + 已连成
+  的 controller），用 applicationContext 构建，不泄漏 Activity。
+- ensureConnecting(context)：已连成直接返回；构建中不重复建；
+  构建失败或 controller 后续断开（MediaController.Listener 的
+  onDisconnected + 读取时 isConnected 复查）都会清掉状态，下次
+  调用重新建。
+- MusicPage 首次组合时用 LaunchedEffect 调 ensureConnecting
+  预热（只加这一处，唱片/FAB/源逻辑未动）；播放页 connectService
+  改为优先采用共享连接：在飞的构建用新的 10 秒预算等待；什么都
+  没有时经 ensureConnecting 发起（构建即归共享持有）。
+- 持有/释放语义：共享 controller 由单例持有，播放页只
+  addListener/removeListener 自己 playerListener，onDestroy 与
+  degrade 时都不 release；Activity 自有 controller 的分支保留
+  release（现行路径下 controller 恒为共享）。
+
+### 预算与会话内重试
+
+- SERVICE_CONNECT_TIMEOUT_MS 3000→10000，
+  SERVICE_CONNECT_WAIT_MS 3500→10000。
+- 已因连接失败降级本地后，播放页存活期间每 5 秒重试
+  connectService、最多 6 次（lifecycleScope，销毁即停）。重试
+  失败只写日志、不再走 degradeToLocal（记录转换不重复 thrash）；
+  重试成功只置 serviceReadyForNext，不打断本地正在播的歌——
+  下一次 startPlayback 时 awaitActivePlayer 优先锁 SERVICE、
+  localControls 置 null，新记录经 startPlayback 原有发布路径
+  自然回到 serviceBacked；切到服务的那一首会先 stop 本地播放器
+  防两首重叠。
+
+### 显式拉起服务与通知权限
+
+- 每 Activity 首次把歌交给服务时（startPlayback 的 controller
+  分支内、setMediaItem 之前），try/catch 调
+  ContextCompat.startForegroundService 拉起 LxPlaybackService，
+  失败静默并写日志。只在服务即将收到曲目时调，避免降级模式下
+  服务无内容可播却被 startForegroundService 的前台时限反噬。
+- 通知权限：init 里已有
+  PermissionHelper.requestNotificationIfNeeded(this)（v1.9.0 起），
+  本版核对保留，不阻塞播放。
+
+### 诊断日志
+
+- MusicCrashLog 新增 log(context, msg)：带时间戳一行，同时写
+  filesDir/music_crash.log 与 getExternalFilesDir(null)/
+  music_crash.log（external 为 null 跳过；超 256KB 沿用删除重建）。
+  后者位于 Android/data/com.github.avbox.osc/files/，可直接拷出。
+- 事件点（克制）：共享连接开始/成功耗时/失败；播放页 connect
+  开始/成功耗时/超时/异常（区分 retry）；degrade 及原因
+  （connect-timeout / connect-exception / controller-dropped /
+  controller-call-failed）；重试第几次/成功；awaitActivePlayer
+  锁定结果（SERVICE/LOCAL，含重试切换）；startForegroundService
+  结果；服务侧 onCreate / onGetSession。
+
+### 音乐页列表底部留白（Torres 反馈：榜单卡片被悬浮栏压住）
+
+- 查证：悬浮栏遮挡高度 = 导航栏 inset + MARGIN 12 + 栏高 64
+  （NavMetrics.FLOATING_OVERLAY_DP=76）；MainScreen 在
+  liquidGlass 分支给 pageContentPadding.bottom 恰为 inset+76，
+  已全额预留，故滚到底最后一行不会被永久切掉。但音乐页只有
+  榜单网格自带 bottom=16dp，搜索结果 / py 列表 / 收藏 / 榜单
+  歌曲四个 LazyColumn 没有任何底部 contentPadding，最后一行
+  底边与悬浮栏顶边 0dp 重合，再叠 MainScreen 底部 140dp 渐变
+  scrim，观感即「被压住」。
+- 改法（只动 MusicPage）：四个 LazyColumn 补
+  contentPadding bottom = 16dp，与榜单网格对齐。76dp 部分已由
+  pageContentPadding 给过，不重复计算；迷你条的 +64dp 是内容
+  Box 的 padding，与容器 contentPadding 正交叠加、不冲突。
+  rail 模式（侧栏）与普通底栏模式下这 16dp 只是列表末尾多一点
+  空白，无副作用。MainScreen 的 scrim 本身未动（全局设计）。
+
+### 真机验证点
+
+1. 冷启动 App → 进音乐页 → 点歌：通知栏应出现 AVBox 媒体通知
+   （歌名 + 暂停键），荣耀灵动岛胶囊应显示播放状态。
+2. 播放中按 Home / 锁屏：音乐继续；回音乐页底部迷你条出现，
+   暂停/下一首可用，点迷你条回播放页不重头播。
+3. 退播放页再切歌、自动连播：仍走服务（通知不消失）。
+4. 榜单/搜索/py 列表/收藏滚到底：最后一行/排完整露在悬浮栏
+   上方，有一小段间隔。
+5. 若仍无通知/不能后台：把 Android/data/com.github.avbox.osc/
+   files/music_crash.log 发回，按 connect/degrade 行定位。

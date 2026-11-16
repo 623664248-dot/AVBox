@@ -12,17 +12,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Registry of py music spider sources for the music tab: six spiders ship
- * in assets/py_sources/ (English slug file names, original file name kept
- * in each script's header comment) and users can import their own .py
- * spiders, mirroring the LX user-script storage: imported files are copied
- * into filesDir/py_music_sources/ and their metadata (id, display name,
- * file name) is kept as a JSON array in KV under [KV_USER_PY_SOURCES].
- *
- * Built-in assets are released into filesDir/py_sources/ on first use
- * ([resolveFile]) because the shared pyramid runtime loads spiders from a
- * real file path (file:// api), not from the asset stream. Running the
- * spiders is [PyMusicBridge]'s job; this object only owns defs and files.
+ * Registry of py music spider sources for the music tab. Since v1.15.0
+ * only user-imported spiders are registered: the six spiders that used
+ * to ship in assets/py_sources/ are no longer released or offered (the
+ * asset files stay in the APK, unreferenced). Imports mirror the LX
+ * user-script storage: files are copied into filesDir/py_music_sources/
+ * and their metadata (id, display name, file name) is kept as a JSON
+ * array in KV under [KV_USER_PY_SOURCES]. Running the spiders is
+ * [PyMusicBridge]'s job; this object only owns defs and files.
  */
 object PyMusicSources {
 
@@ -33,31 +30,20 @@ object PyMusicSources {
         val id: String,
         val name: String,
         val user: Boolean,
-        /** Asset path for built-ins ("py_sources/<slug>.py"); null for user imports. */
+        /** Legacy asset path of the removed built-ins; always null now. */
         val assetPath: String?,
-        /** Absolute file path for user imports; null for built-ins. */
+        /** Absolute file path of the imported spider. */
         val filePath: String?,
     )
 
     private const val KV_USER_PY_SOURCES = "py_music_sources"
-    private const val BUILTIN_DIR_NAME = "py_sources"
     private const val USER_DIR_NAME = "py_music_sources"
     private const val MAX_SCRIPT_BYTES = 2 * 1024 * 1024
 
-    /** Built-in spiders bundled in assets/py_sources/. */
-    val BUILTINS: List<PyDef> = listOf(
-        PyDef("fy_musicbox", "音乐盒（丢丢喵）", user = false, assetPath = "py_sources/fy_musicbox.py", filePath = null),
-        PyDef("kuwo_youyou", "小心儿悠悠（酷我）", user = false, assetPath = "py_sources/kuwo_youyou.py", filePath = null),
-        PyDef("netease_music", "网易云音乐", user = false, assetPath = "py_sources/netease_music.py", filePath = null),
-        PyDef("netease_ddm1", "网易云（丢丢喵1）", user = false, assetPath = "py_sources/netease_ddm1.py", filePath = null),
-        PyDef("netease_ddm2", "网易云（丢丢喵2）", user = false, assetPath = "py_sources/netease_ddm2.py", filePath = null),
-        PyDef("kugou_5sing", "5sing原创（丢丢喵）", user = false, assetPath = "py_sources/kugou_5sing.py", filePath = null),
-    )
-
-    /** All selectable py sources: built-ins first, then user imports. */
+    /** All selectable py sources: the user imports, in import order. */
     fun loadDefs(context: Context): List<PyDef> {
         val dir = userDir(context)
-        val userDefs = readMetas().mapNotNull { meta ->
+        return readMetas().mapNotNull { meta ->
             val file = File(dir, meta.fileName)
             if (!file.isFile) {
                 AppLog.i("PyMusicSources missing file for " + meta.id)
@@ -72,37 +58,18 @@ object PyMusicSources {
                 )
             }
         }
-        return BUILTINS + userDefs
     }
 
     fun findDef(context: Context, id: String): PyDef? =
         loadDefs(context).firstOrNull { it.id == id }
 
     /**
-     * The on-disk .py file for [def]. Built-in assets are copied into
-     * filesDir/py_sources/ the first time (and re-copied when the bundled
-     * asset's size changes, e.g. after an app update). Blocking IO: call
-     * on a background dispatcher.
+     * The on-disk .py file for [def]; every registered def is a user
+     * import with a real file path. (The [context] parameter is kept
+     * for the existing call sites in PyMusicBridge.)
      */
     fun resolveFile(context: Context, def: PyDef): File {
-        val assetPath = def.assetPath
-        if (assetPath == null) {
-            return File(requireNotNull(def.filePath) { "py def without file: " + def.id })
-        }
-        val dir = File(context.filesDir, BUILTIN_DIR_NAME)
-        if (!dir.exists()) dir.mkdirs()
-        val target = File(dir, def.id + ".py")
-        val assetSize = try {
-            context.assets.openFd(assetPath).use { it.length }
-        } catch (e: Exception) {
-            -1L
-        }
-        if (!target.isFile || (assetSize > 0 && target.length() != assetSize)) {
-            context.assets.open(assetPath).use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
-            }
-        }
-        return target
+        return File(requireNotNull(def.filePath) { "py def without file: " + def.id })
     }
 
     /**

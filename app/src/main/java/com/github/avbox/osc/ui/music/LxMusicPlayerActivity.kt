@@ -1,6 +1,5 @@
 package com.github.avbox.osc.ui.music
 
-import android.content.ComponentName
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -12,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.compose.ui.graphics.Color
@@ -27,7 +27,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
-import androidx.media3.session.SessionToken
 import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
@@ -39,6 +38,7 @@ import com.github.avbox.osc.music.LxPlaybackService
 import com.github.avbox.osc.music.LyricMatcher
 import com.github.avbox.osc.music.MusicApi
 import com.github.avbox.osc.music.MusicCrashLog
+import com.github.avbox.osc.music.MusicServiceConnection
 import com.github.avbox.osc.music.NowPlayingState
 import com.github.avbox.osc.music.MusicTrack
 import com.github.avbox.osc.music.PyMusicBridge
@@ -50,18 +50,15 @@ import com.github.avbox.osc.ui.theme.AVBoxTheme
 import com.github.avbox.osc.ui.theme.enableTransparentEdgeToEdge
 import com.github.avbox.osc.util.KV
 import com.github.avbox.osc.util.PermissionHelper
-import com.google.common.util.concurrent.ListenableFuture
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
 import kotlin.random.Random
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
@@ -76,10 +73,17 @@ import okhttp3.Request
  *
  * Playback target (v1.13.3): the player first tries the background
  * [LxPlaybackService] through a MediaController; if connecting fails,
- * times out or drops, the whole session degrades to the in-Activity
- * ExoPlayer (the pre-v1.13.3 behaviour) and never retries, so the worst
- * case is exactly the old player. All queue/loop/progress logic talks
- * to the [Player] interface, which the controller also implements.
+ * times out or drops, the session degrades to the in-Activity
+ * ExoPlayer (the pre-v1.13.3 behaviour), so the worst case is exactly
+ * the old player. All queue/loop/progress logic talks to the [Player]
+ * interface, which the controller also implements.
+ *
+ * Connection hardening (v1.15.1): the controller is the process-wide
+ * shared one from MusicServiceConnection (the music page warms it up
+ * before the user even taps a song), the connect budget is 10 s, and
+ * a session that degraded keeps retrying in the background — a late
+ * success takes over from the next track instead of interrupting the
+ * song the local player is playing.
  */
 class LxMusicPlayerActivity : BaseActivity() {
 
@@ -96,11 +100,22 @@ class LxMusicPlayerActivity : BaseActivity() {
         /** KV key for the persisted loop mode (LxLoopMode name). */
         private const val KV_LOOP_MODE = "lx_loop_mode"
 
-        /** How long building the MediaController may take before degrading. */
-        private const val SERVICE_CONNECT_TIMEOUT_MS = 3000L
+        /**
+         * How long building the MediaController may take before
+         * degrading. 10 s since v1.15.1: the old 3 s budget lost the
+         * cold-start race on the test device (QuickJS/Python init
+         * competing), which is why the service never engaged there.
+         */
+        private const val SERVICE_CONNECT_TIMEOUT_MS = 10000L
 
         /** How long the first playAt waits for the connection attempt. */
-        private const val SERVICE_CONNECT_WAIT_MS = 3500L
+        private const val SERVICE_CONNECT_WAIT_MS = 10000L
+
+        /** Delay between in-session service connection retries. */
+        private const val SERVICE_RETRY_INTERVAL_MS = 5000L
+
+        /** Max in-session retries after a connection-failure degrade. */
+        private const val SERVICE_RETRY_MAX_ATTEMPTS = 6
 
         /** Timeout for one custom command round-trip to the service. */
         private const val SERVICE_COMMAND_TIMEOUT_MS = 2000L
@@ -165,13 +180,35 @@ class LxMusicPlayerActivity : BaseActivity() {
 
     // Background-service playback (v1.13.3). The controller, once built,
     // is just another Player; playbackMode locks at the first start and
-    // only ever moves SERVICE -> LOCAL (degrade), never back.
+    // moves SERVICE -> LOCAL on degrade. Since v1.15.1 it can also move
+    // back LOCAL -> SERVICE, but only at a track start after a retry
+    // reconnected (see serviceReadyForNext), never mid-song.
     private var controller: MediaController? = null
-    private var controllerFuture: ListenableFuture<MediaController>? = null
     private var connectJob: Job? = null
     private var attachJob: Job? = null
     private var playbackMode = PlaybackMode.UNKNOWN
     private var serviceDegraded = false
+
+    /**
+     * True when [controller] is the process-wide shared one from
+     * MusicServiceConnection: this Activity removes its listener on
+     * destroy/degrade but never releases it. (A controller this
+     * Activity owned outright would be released instead.)
+     */
+    private var controllerIsShared = false
+
+    /** Retry loop of a degraded session (v1.15.1); see degradeToLocal. */
+    private var serviceRetryJob: Job? = null
+
+    /**
+     * Set when a retry reconnected the service after the session had
+     * degraded: the next track start switches playback to the service
+     * (awaitActivePlayer), the current local song plays on untouched.
+     */
+    private var serviceReadyForNext = false
+
+    /** startForegroundService is issued once per Activity (v1.15.1). */
+    private var foregroundServiceStarted = false
 
     /** Audio session id of the service player, fetched by custom command. */
     private var serviceSessionId = 0
@@ -553,56 +590,89 @@ class LxMusicPlayerActivity : BaseActivity() {
     // ------------------------------------------------- service playback
 
     /**
-     * Builds the MediaController to [LxPlaybackService]. Any failure —
-     * exception, error future, or the connect timeout — degrades the
-     * session to the local player via [degradeToLocal]; this function
-     * never throws.
+     * Adopts the shared MediaController to [LxPlaybackService] from
+     * MusicServiceConnection (the music page warms the connection up;
+     * this call starts it when nobody has). Any failure — exception or
+     * the connect timeout — degrades the session to the local player
+     * via [degradeToLocal]; this function never throws.
+     *
+     * A retry attempt ([isRetry], from the degraded session's retry
+     * loop) never degrades again on failure — it only logs — and on
+     * success it does not switch playback mid-song: it sets
+     * [serviceReadyForNext] and the next track start takes the service
+     * over in awaitActivePlayer.
      */
-    private suspend fun connectService() {
+    private suspend fun connectService(isRetry: Boolean = false) {
+        val startedAt = SystemClock.elapsedRealtime()
         try {
-            val token = SessionToken(
-                this,
-                ComponentName(this, LxPlaybackService::class.java),
-            )
-            val future = MediaController.Builder(this, token).buildAsync()
-            controllerFuture = future
-            val mc = withTimeoutOrNull(SERVICE_CONNECT_TIMEOUT_MS) {
-                suspendCancellableCoroutine<MediaController?> { cont ->
-                    future.addListener(
-                        {
-                            val built = try {
-                                future.get()
-                            } catch (t: Throwable) {
-                                null
-                            }
-                            if (cont.isActive) cont.resume(built)
-                        },
-                        ContextCompat.getMainExecutor(this@LxMusicPlayerActivity),
+            val current = controller
+            if (current != null && current.isConnected()) {
+                if (isRetry) {
+                    serviceReadyForNext = true
+                }
+                return
+            }
+            MusicCrashLog.log(this, "player: connect start (retry=$isRetry)")
+            val mc = MusicServiceConnection.connectedController()
+                ?: run {
+                    MusicServiceConnection.ensureConnecting(this)
+                    MusicServiceConnection.awaitConnected(
+                        SERVICE_CONNECT_TIMEOUT_MS,
                     )
                 }
-            }
             if (mc == null) {
-                degradeToLocal()
+                MusicCrashLog.log(
+                    this,
+                    "player: connect timeout after " +
+                        "${SystemClock.elapsedRealtime() - startedAt}ms " +
+                        "(retry=$isRetry)",
+                )
+                if (!isRetry) {
+                    degradeToLocal("connect-timeout")
+                }
                 return
             }
             controller = mc
+            controllerIsShared = true
             mc.addListener(playerListener)
             mc.repeatMode = if (state.loopMode == LxLoopMode.SINGLE) {
                 Player.REPEAT_MODE_ONE
             } else {
                 Player.REPEAT_MODE_OFF
             }
+            MusicCrashLog.log(
+                this,
+                "player: connect ok in " +
+                    "${SystemClock.elapsedRealtime() - startedAt}ms " +
+                    "(retry=$isRetry)",
+            )
+            if (isRetry) {
+                serviceReadyForNext = true
+            }
         } catch (t: Throwable) {
-            degradeToLocal()
+            MusicCrashLog.log(
+                this,
+                "player: connect exception ${t.javaClass.simpleName} " +
+                    "(retry=$isRetry)",
+            )
+            if (!isRetry) {
+                degradeToLocal("connect-exception")
+            }
         }
     }
 
     /**
-     * Permanently falls back to the in-Activity player for the rest of
-     * this session: the service is never retried, so a broken service
-     * link costs one bounded wait, not a failure per song.
+     * Falls back to the in-Activity player: the mini bar reaches it
+     * through the local controls, and a service-backed record of the
+     * song this page is showing becomes a local one (that conversion
+     * self-guards on the record still being service-backed, so a
+     * repeated degrade does not republish it). Since v1.15.1 the
+     * fallback is not permanent: [startServiceRetryLoop] keeps trying
+     * to reconnect while the page lives, and a success takes over
+     * from the next track. [reason] lands in the diagnostic log.
      */
-    private fun degradeToLocal() {
+    private fun degradeToLocal(reason: String) {
+        MusicCrashLog.log(this, "player: degrade to local ($reason)")
         serviceDegraded = true
         if (playbackMode == PlaybackMode.SERVICE) {
             playbackMode = PlaybackMode.LOCAL
@@ -612,11 +682,22 @@ class LxMusicPlayerActivity : BaseActivity() {
         serviceSessionId = 0
         if (mc != null) {
             try {
-                mc.release()
+                mc.removeListener(playerListener)
             } catch (t: Throwable) {
                 // already gone; the local player is unaffected
             }
+            // A shared controller is never released here: it belongs
+            // to MusicServiceConnection (and the retry loop below may
+            // adopt it again). An Activity-owned one would be.
+            if (!controllerIsShared) {
+                try {
+                    mc.release()
+                } catch (t: Throwable) {
+                    // already gone; the local player is unaffected
+                }
+            }
         }
+        controllerIsShared = false
         // The session is local from here on: the mini bar reaches it
         // through the local controls, and a service-backed record of
         // the song this page is showing becomes a local one.
@@ -628,6 +709,67 @@ class LxMusicPlayerActivity : BaseActivity() {
         ) {
             NowPlayingState.publish(
                 info.copy(serviceBacked = false, isPlaying = state.playing),
+            )
+        }
+        startServiceRetryLoop()
+    }
+
+    /**
+     * Bounded in-session reconnection (v1.15.1): every
+     * [SERVICE_RETRY_INTERVAL_MS], at most [SERVICE_RETRY_MAX_ATTEMPTS]
+     * times, while the page lives and the session has not locked onto
+     * the service. A success only sets [serviceReadyForNext]; the loop
+     * ends on success, on the attempt cap, or with the Activity.
+     */
+    private fun startServiceRetryLoop() {
+        if (serviceRetryJob?.isActive == true) return
+        serviceRetryJob = lifecycleScope.launch {
+            var attempts = 0
+            while (attempts < SERVICE_RETRY_MAX_ATTEMPTS &&
+                playbackMode != PlaybackMode.SERVICE
+            ) {
+                delay(SERVICE_RETRY_INTERVAL_MS)
+                if (playbackMode == PlaybackMode.SERVICE) break
+                attempts++
+                MusicCrashLog.log(
+                    this@LxMusicPlayerActivity,
+                    "player: connect retry $attempts/$SERVICE_RETRY_MAX_ATTEMPTS",
+                )
+                connectService(isRetry = true)
+                if (serviceReadyForNext) {
+                    MusicCrashLog.log(
+                        this@LxMusicPlayerActivity,
+                        "player: connect retry ok, service from next track",
+                    )
+                    break
+                }
+            }
+        }
+    }
+
+    /**
+     * Explicitly starts [LxPlaybackService] as a foreground service
+     * (v1.15.1), once per Activity, on the first hand-off to the
+     * service: on Honor/MagicOS a started foreground service is much
+     * harder for the system to throttle than a merely bound one. Only
+     * called when the service is about to receive a track, so the
+     * service can promote itself with its media notification right
+     * away. Failures are logged and ignored.
+     */
+    private fun startServiceForegroundOnce() {
+        if (foregroundServiceStarted) return
+        foregroundServiceStarted = true
+        try {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, LxPlaybackService::class.java),
+            )
+            MusicCrashLog.log(this, "player: startForegroundService ok")
+        } catch (t: Throwable) {
+            MusicCrashLog.log(
+                this,
+                "player: startForegroundService failed " +
+                    t.javaClass.simpleName,
             )
         }
     }
@@ -655,13 +797,38 @@ class LxMusicPlayerActivity : BaseActivity() {
      * connection and degrade if it dropped.
      */
     private suspend fun awaitActivePlayer(): Player? {
+        // v1.15.1: a retry reconnected the service after this session
+        // had degraded to local. The song the local player is playing
+        // is not interrupted — this function only runs at a track
+        // start — but from this start on the service takes over, and
+        // the record startPlayback is about to publish goes out as
+        // service-backed again through the normal publish path.
+        if (serviceReadyForNext) {
+            serviceReadyForNext = false
+            val mc = controller
+            if (mc != null && mc.isConnected()) {
+                playbackMode = PlaybackMode.SERVICE
+                serviceDegraded = false
+                NowPlayingState.localControls = null
+                mc.repeatMode = if (state.loopMode == LxLoopMode.SINGLE) {
+                    Player.REPEAT_MODE_ONE
+                } else {
+                    Player.REPEAT_MODE_OFF
+                }
+                MusicCrashLog.log(
+                    this,
+                    "player: lock SERVICE (retry, from next track)",
+                )
+                return mc
+            }
+        }
         when (playbackMode) {
             PlaybackMode.SERVICE -> {
                 val mc = controller
                 if (mc != null && mc.isConnected()) {
                     return mc
                 }
-                degradeToLocal()
+                degradeToLocal("controller-dropped")
                 return player
             }
 
@@ -688,6 +855,7 @@ class LxMusicPlayerActivity : BaseActivity() {
             NowPlayingState.localControls = localControlsImpl
             PlaybackMode.LOCAL
         }
+        MusicCrashLog.log(this, "player: mode locked $playbackMode")
         return if (playbackMode == PlaybackMode.SERVICE) mc else player
     }
 
@@ -721,6 +889,17 @@ class LxMusicPlayerActivity : BaseActivity() {
             ),
         )
         if (target is MediaController) {
+            // A session that switched to the service after a retry
+            // (v1.15.1) may still have the previous song on the local
+            // player: stop it so the two never overlap. In a session
+            // that was on the service from the start the local player
+            // is idle and this is a no-op.
+            try {
+                player?.stop()
+            } catch (t: Throwable) {
+                // already stopped; the hand-off continues either way
+            }
+            startServiceForegroundOnce()
             sendHeadersToService(target, currentHeaders)
             try {
                 target.setMediaItem(item)
@@ -728,7 +907,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                 target.play()
                 return
             } catch (t: Throwable) {
-                degradeToLocal()
+                degradeToLocal("controller-call-failed")
             }
         }
         val exo = player ?: return
@@ -1418,6 +1597,7 @@ class LxMusicPlayerActivity : BaseActivity() {
         connectJob?.cancel()
         attachJob?.cancel()
         sessionIdFetchJob?.cancel()
+        serviceRetryJob?.cancel()
         // Mini bar bookkeeping: unregister this instance's local
         // controls, and clear the record when it was local-backed —
         // local playback dies with this page. A service-backed record
@@ -1434,24 +1614,29 @@ class LxMusicPlayerActivity : BaseActivity() {
         state.sleepTimerEndAtMs = 0L
         state.sleepMinutesLeft = 0
         releaseEffects()
-        // Release only the controller handle: the service (and its
-        // playback) outlives the page, which is the point of the
-        // service mode. The local player is ours and is released.
+        // Detach from the controller: the service (and its playback)
+        // outlives the page, which is the point of the service mode.
+        // The shared controller is only un-listened — releasing it
+        // would kill the process-wide warm connection for everyone;
+        // an Activity-owned controller would be released instead.
+        // The local player is ours and is released.
         val mc = controller
         controller = null
         if (mc != null) {
             try {
-                mc.release()
+                mc.removeListener(playerListener)
             } catch (t: Throwable) {
                 // already gone
             }
+            if (!controllerIsShared) {
+                try {
+                    mc.release()
+                } catch (t: Throwable) {
+                    // already gone
+                }
+            }
         }
-        try {
-            controllerFuture?.cancel(true)
-        } catch (t: Throwable) {
-            // already done or released above
-        }
-        controllerFuture = null
+        controllerIsShared = false
         player?.release()
         player = null
         super.onDestroy()

@@ -29,9 +29,10 @@ import kotlinx.coroutines.withContext
 enum class MusicMode { SEARCH, CHARTS, FAVORITES }
 
 /**
- * Music tab state: owns the LX source bridge lifecycle (built-in scripts
- * plus user-imported ones), platform search (native, via MusicApi) and
- * pagination. The Compose page only renders this state.
+ * Music tab state: owns the LX source bridge lifecycle (user-imported
+ * scripts and py spiders only since v1.15.0 — no bundled sources),
+ * platform search (native, via MusicApi) and pagination. The Compose
+ * page only renders this state.
  */
 class MusicViewModel : ViewModel() {
 
@@ -104,6 +105,10 @@ class MusicViewModel : ViewModel() {
     private val _scriptBusy = MutableStateFlow(true)
     val scriptBusy: StateFlow<Boolean> = _scriptBusy.asStateFlow()
 
+    /** True when the user has not imported any source (JS or py) at all. */
+    private val _noSource = MutableStateFlow(false)
+    val noSource: StateFlow<Boolean> = _noSource.asStateFlow()
+
     // ------------------------------------------------------------- py mode
 
     /** True while a py spider source is the selected music source. */
@@ -162,8 +167,13 @@ class MusicViewModel : ViewModel() {
         reloadPyDefs()
         refreshScriptOptions(selectedId = savedScriptId())
         viewModelScope.launch {
-            // A remembered py source re-activates in spider mode; when it
-            // no longer loads, fall through to the JS default below.
+            // A remembered py source re-activates in spider mode and a
+            // remembered JS script re-inits the bridge. When the
+            // remembered source is gone (e.g. a bundled source removed
+            // in v1.15.0) or fails to load, the first remaining user
+            // source in dialog order (JS scripts, then py spiders)
+            // takes over. With no user sources at all the tab stays in
+            // its empty state: no bridge init, nothing that can fail.
             var started = false
             val saved: String = KV.get(KV_SCRIPT_ID, "")
             if (saved.startsWith(MusicTrack.PY_SOURCE_PREFIX)) {
@@ -174,16 +184,17 @@ class MusicViewModel : ViewModel() {
                     started = activatePy(def, persist = false)
                 }
             }
+            if (!started && saved.isNotEmpty() &&
+                !saved.startsWith(MusicTrack.PY_SOURCE_PREFIX) &&
+                userDefs.any { it.id == saved }
+            ) {
+                started = initBridge(saved)
+            }
             if (!started) {
-                val savedJs = savedScriptId()
-                val target = savedJs.takeUnless {
-                    it.startsWith(MusicTrack.PY_SOURCE_PREFIX)
-                } ?: LxBridge.SCRIPTS.first().id
-                if (!initBridge(target) && target != LxBridge.SCRIPTS.first().id) {
-                    // The remembered script (e.g. an imported one) no longer
-                    // loads; fall back to the default built-in so the tab works.
-                    initBridge(LxBridge.SCRIPTS.first().id)
-                }
+                started = startFirstAvailable(exclude = setOf(saved))
+            }
+            if (!started && userDefs.isEmpty() && pyDefs.isEmpty()) {
+                _scriptBusy.value = false
             }
             // Charts is the default mode: once the platform list is ready,
             // load its catalog. Script switches and platform changes reload
@@ -197,20 +208,67 @@ class MusicViewModel : ViewModel() {
 
     // ------------------------------------------------------------- bridge
 
-    /** All selectable scripts: built-ins first, then user-imported ones. */
-    private fun allDefs(): List<LxBridge.ScriptDef> = LxBridge.SCRIPTS + userDefs
+    /** All selectable JS scripts: the user imports (no bundled ones). */
+    private fun allDefs(): List<LxBridge.ScriptDef> = userDefs
 
-    private fun findDef(scriptId: String): LxBridge.ScriptDef =
-        allDefs().firstOrNull { it.id == scriptId } ?: LxBridge.SCRIPTS.first()
+    private fun findDef(scriptId: String): LxBridge.ScriptDef? =
+        userDefs.firstOrNull { it.id == scriptId }
 
     private fun reloadUserDefs() {
         val context = AppContextHolder.context() ?: return
         userDefs = LxUserScripts.loadDefs(context)
+        updateNoSource()
     }
 
     private fun reloadPyDefs() {
         val context = AppContextHolder.context() ?: return
         pyDefs = PyMusicSources.loadDefs(context)
+        updateNoSource()
+    }
+
+    private fun updateNoSource() {
+        _noSource.value = userDefs.isEmpty() && pyDefs.isEmpty()
+    }
+
+    /**
+     * Tries the remaining user sources in dialog order (JS scripts
+     * first, then py spiders) until one starts. [exclude] holds option
+     * ids (a raw JS id, or "py:" + slug for spiders) to skip, e.g. the
+     * remembered source that just failed. With [persist] the winner is
+     * also written to KV as the remembered choice.
+     */
+    private suspend fun startFirstAvailable(
+        exclude: Set<String> = emptySet(),
+        persist: Boolean = false,
+    ): Boolean {
+        for (def in userDefs) {
+            if (def.id in exclude) continue
+            if (initBridge(def.id)) {
+                if (persist) KV.put(KV_SCRIPT_ID, def.id)
+                return true
+            }
+        }
+        for (def in pyDefs) {
+            if (MusicTrack.PY_SOURCE_PREFIX + def.id in exclude) continue
+            if (activatePy(def, persist = persist)) return true
+        }
+        return false
+    }
+
+    /**
+     * After the in-use source went away (deleted): start another user
+     * source, or settle into the no-source empty state with a cleared
+     * platform list instead of pointing at a dead script id.
+     */
+    private suspend fun enterFallbackOrNoSource() {
+        if (startFirstAvailable(persist = true)) return
+        _pyActive.value = false
+        currentPyDef = null
+        _sources.value = emptyList()
+        _selectedSource.value = ""
+        KV.put(KV_SCRIPT_ID, "")
+        refreshScriptOptions(selectedId = "")
+        _scriptBusy.value = false
     }
 
     /**
@@ -220,8 +278,8 @@ class MusicViewModel : ViewModel() {
      * load already tore the previous script's context down.
      */
     private suspend fun initBridge(scriptId: String): Boolean {
+        val def = findDef(scriptId) ?: return false
         _scriptBusy.value = true
-        val def = findDef(scriptId)
         return try {
             val info = LxBridge.loadScript(def)
             val registry = LxBridge.awaitInited()
@@ -313,7 +371,7 @@ class MusicViewModel : ViewModel() {
         }
     }
 
-    /** Deletes a user-imported script; falls back to the default if it was in use. */
+    /** Deletes a user-imported script; falls back to another user source if it was in use. */
     fun deleteScript(id: String) {
         if (userDefs.none { it.id == id }) return
         val context = AppContextHolder.context() ?: return
@@ -323,7 +381,7 @@ class MusicViewModel : ViewModel() {
             reloadUserDefs()
             _messages.tryEmit(str(R.string.music_source_deleted))
             if (wasInUse) {
-                switchScript(LxBridge.SCRIPTS.first().id)
+                enterFallbackOrNoSource()
             } else {
                 refreshScriptOptions(selectedId = selectedScriptId())
             }
@@ -399,7 +457,7 @@ class MusicViewModel : ViewModel() {
         }
     }
 
-    /** Deletes a user-imported py spider; falls back to the JS default if in use. */
+    /** Deletes a user-imported py spider; falls back to another user source if in use. */
     fun deletePyScript(optionId: String) {
         val defId = optionId.removePrefix(MusicTrack.PY_SOURCE_PREFIX)
         val def = pyDefs.firstOrNull { it.id == defId && it.user } ?: return
@@ -412,7 +470,7 @@ class MusicViewModel : ViewModel() {
             if (wasInUse) {
                 currentPyDef = null
                 _pyActive.value = false
-                switchScript(LxBridge.SCRIPTS.first().id)
+                enterFallbackOrNoSource()
             } else {
                 refreshScriptOptions(selectedId = selectedScriptId())
             }
@@ -580,15 +638,17 @@ class MusicViewModel : ViewModel() {
     private fun savedScriptId(): String {
         // Must pass a String default: KV returns null for keys that are not
         // registered in the KVKeySpec table when no default is given, which
-        // made the saved script choice never persist. "" means "not saved".
+        // made the saved script choice never persist. "" means "not saved"
+        // — and, since v1.15.0, also the answer when the remembered id no
+        // longer names a user source (there is no bundled fallback).
         val saved: String = KV.get(KV_SCRIPT_ID, "")
         if (saved.startsWith(MusicTrack.PY_SOURCE_PREFIX)) {
             return saved.takeIf { id ->
                 pyDefs.any { MusicTrack.PY_SOURCE_PREFIX + it.id == id }
-            } ?: LxBridge.SCRIPTS.first().id
+            } ?: ""
         }
-        return saved.takeIf { id -> id.isNotEmpty() && allDefs().any { it.id == id } }
-            ?: LxBridge.SCRIPTS.first().id
+        return saved.takeIf { id -> id.isNotEmpty() && userDefs.any { it.id == id } }
+            ?: ""
     }
 
     // ------------------------------------------------------------- search

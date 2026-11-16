@@ -12,16 +12,12 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -33,7 +29,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -71,30 +66,26 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.ui.input.pointer.changedToUp
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -108,6 +99,7 @@ import com.github.avbox.osc.R
 import com.github.avbox.osc.music.LxBridge
 import com.github.avbox.osc.music.LxPlaybackService
 import com.github.avbox.osc.music.MusicChart
+import com.github.avbox.osc.music.MusicServiceConnection
 import com.github.avbox.osc.music.MusicTrack
 import com.github.avbox.osc.music.NowPlayingState
 import com.github.avbox.osc.music.PyMusicBridge
@@ -121,7 +113,6 @@ import com.github.avbox.osc.ui.music.MusicBackground
 import com.github.avbox.osc.util.KV
 import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.TimeUnit
-import kotlin.math.roundToInt
 import kotlin.random.Random
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -143,6 +134,7 @@ fun MusicPage(
     val searched by vm.searched.collectAsStateWithLifecycle()
     val scriptOptions by vm.scriptOptions.collectAsStateWithLifecycle()
     val scriptBusy by vm.scriptBusy.collectAsStateWithLifecycle()
+    val noSource by vm.noSource.collectAsStateWithLifecycle()
     val mode by vm.mode.collectAsStateWithLifecycle()
     val charts by vm.charts.collectAsStateWithLifecycle()
     val chartSongs by vm.chartSongs.collectAsStateWithLifecycle()
@@ -164,8 +156,6 @@ fun MusicPage(
     var query by rememberSaveable { mutableStateOf("") }
     var scriptDialogOpen by remember { mutableStateOf(false) }
     var appearanceOpen by remember { mutableStateOf(false) }
-    var rootSize by remember { mutableStateOf(IntSize.Zero) }
-    var fabOffset by remember { mutableStateOf(readSavedFabOffset()) }
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -197,6 +187,15 @@ fun MusicPage(
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    // Warm the shared playback-service connection while the user is
+    // still browsing (v1.15.1): the player page then adopts an
+    // already-connected controller instead of cold-starting the
+    // service on tap, which timed out on the test device and silently
+    // degraded every session to in-page playback.
+    LaunchedEffect(Unit) {
+        MusicServiceConnection.ensureConnecting(context)
     }
 
     // Mini player bar: the shared now-playing record plus this page's
@@ -273,23 +272,27 @@ fun MusicPage(
             .fillMaxSize()
             .padding(contentPadding)
             .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(horizontal = 16.dp)
-            .onSizeChanged { rootSize = it },
+            .padding(horizontal = 16.dp),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Spacer(Modifier.height(12.dp))
-            // Top row: animated note, the search field and the appearance
-            // entry. The field lives here in both native and spider mode
-            // (it used to sit inside the mode contents below); its query
-            // state, IME search action and pill styling are unchanged,
-            // only the search target differs (native search switches to
-            // the search mode first so the results stay visible).
+            // Top row: the vinyl source button, the search field and the
+            // appearance entry. Both round buttons are 40dp with equal
+            // 8dp spacing, so the field between them stays centered. The
+            // field lives here in both native and spider mode (it used to
+            // sit inside the mode contents below); its query state, IME
+            // search action and pill styling are unchanged, only the
+            // search target differs (native search switches to the
+            // search mode first so the results stay visible).
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                AnimatedMusicNote()
+                VinylSourceButton(
+                    playing = nowPlaying?.isPlaying == true,
+                    onClick = { scriptDialogOpen = true },
+                )
                 MusicSearchField(
                     query = query,
                     onQueryChange = { query = it },
@@ -305,17 +308,19 @@ fun MusicPage(
                     },
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = { appearanceOpen = true }) {
+                TopRoundButton(onClick = { appearanceOpen = true }) {
                     Icon(
                         painter = painterResource(R.drawable.ic_settings_theme),
                         contentDescription = stringResource(R.string.music_appearance),
+                        modifier = Modifier.size(20.dp),
                     )
                 }
             }
 
             // Second row: the platform chips act as the resource-site
             // switcher and span the full width; the source-script entry
-            // moved to the draggable floating button overlaid on the page.
+            // is the vinyl button in the top row (the floating button
+            // was removed in v1.15.0).
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -387,7 +392,20 @@ fun MusicPage(
                     .fillMaxSize()
                     .padding(bottom = if (miniBarVisible) 64.dp else 0.dp),
             ) {
-                if (pyActive) {
+                if (noSource) {
+                    // No user source imported yet: the bridge never
+                    // inits and every list call safely returns empty,
+                    // so all the page needs is this hint.
+                    Text(
+                        text = stringResource(R.string.music_no_source),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(horizontal = 32.dp),
+                    )
+                } else if (pyActive) {
                     PySpiderContent(
                         items = pyItems,
                         loading = pyLoading,
@@ -440,7 +458,20 @@ fun MusicPage(
                                 }
 
                                 results.isNotEmpty() -> {
-                                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                    // Bottom content padding (also on the
+                                    // other lists below and the py /
+                                    // favourites / chart-songs lists): the
+                                    // page root already reserves the
+                                    // floating nav bar's full occlusion
+                                    // (76dp + nav inset) through
+                                    // contentPadding, so without this the
+                                    // last row rests flush against the
+                                    // bar's top edge — 16dp matches the
+                                    // charts grid's existing clearance.
+                                    LazyColumn(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentPadding = PaddingValues(bottom = 16.dp),
+                                    ) {
                                         itemsIndexed(
                                             results,
                                             key = { index, _ -> index },
@@ -597,16 +628,6 @@ fun MusicPage(
                 )
             }
         }
-        MusicSourceFab(
-            boundsSize = rootSize,
-            savedOffset = fabOffset,
-            enabled = !scriptBusy,
-            onPersistOffset = { offset ->
-                fabOffset = offset
-                saveFabOffset(offset)
-            },
-            onClick = { scriptDialogOpen = true },
-        )
     }
     }
 
@@ -830,7 +851,10 @@ private fun PySpiderContent(
                 }
 
                 items.isNotEmpty() -> {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 16.dp),
+                    ) {
                         itemsIndexed(
                             items,
                             key = { index, _ -> index },
@@ -874,45 +898,110 @@ private fun PySpiderContent(
 }
 
 /**
- * The music note at the start of the top search row, gently bobbing and
- * tilting on an infinite transition (same animation APIs as the shimmer
- * in ui/components/Skeleton.kt). Amplitudes stay small (±3dp, ±8°) and
- * the full cycle is 1.2s (600ms each way, reversed), so the single 24dp
- * icon costs nothing measurable next to the lists below.
+ * Shared shell of the two round buttons flanking the search field: a
+ * 40dp circle with a light outline and a translucent fill (the page's
+ * usual 0.45-alpha surface over a custom background, a soft
+ * surfaceVariant tint otherwise), content centered.
  */
 @Composable
-private fun AnimatedMusicNote() {
-    val transition = rememberInfiniteTransition(label = "musicNote")
-    val bobLimitPx = with(LocalDensity.current) { 3.dp.toPx() }
-    val bob by transition.animateFloat(
-        initialValue = -bobLimitPx,
-        targetValue = bobLimitPx,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 600, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse,
+private fun TopRoundButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    Surface(
+        modifier = modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        shape = CircleShape,
+        color = if (MusicAppearance.bgPath.isNotBlank()) {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+        },
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
         ),
-        label = "musicNoteBob",
-    )
-    val tilt by transition.animateFloat(
-        initialValue = -8f,
-        targetValue = 8f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 600, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "musicNoteTilt",
-    )
-    Icon(
-        painter = painterResource(R.drawable.ic_tab_music),
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.primary,
-        modifier = Modifier
-            .size(24.dp)
-            .graphicsLayer {
-                translationY = bob
-                rotationZ = tilt
-            },
-    )
+    ) {
+        Box(contentAlignment = Alignment.Center, content = content)
+    }
+}
+
+/**
+ * The source-script entry of the top row: a self-drawn vinyl record
+ * (black disc, groove rings, a light arc, colored center label with an
+ * off-center dot, spindle hole) inside the shared round-button shell.
+ * While the shared now-playing record reports playback the disc spins
+ * at one turn per 6 seconds; paused or idle it rests. The angle is
+ * accumulated frame by frame only while playing, so toggling play
+ * state never makes the disc jump. Tapping opens the same source
+ * dialog the removed floating button used to open.
+ */
+@Composable
+private fun VinylSourceButton(
+    playing: Boolean,
+    onClick: () -> Unit,
+) {
+    var rotation by remember { mutableStateOf(0f) }
+    val playingNow = rememberUpdatedState(playing)
+    LaunchedEffect(Unit) {
+        var lastFrameMs = -1L
+        while (true) {
+            withFrameMillis { frameMs ->
+                if (lastFrameMs >= 0L && playingNow.value) {
+                    // 360 degrees per 6000ms of playing time.
+                    rotation = (rotation + (frameMs - lastFrameMs) * 0.06f) % 360f
+                }
+                lastFrameMs = frameMs
+            }
+        }
+    }
+    val labelColor = MaterialTheme.colorScheme.primary
+    val holeColor = MaterialTheme.colorScheme.surface
+    val description = stringResource(R.string.music_source_switch)
+    TopRoundButton(
+        onClick = onClick,
+        modifier = Modifier.semantics { contentDescription = description },
+    ) {
+        Canvas(
+            modifier = Modifier
+                .size(30.dp)
+                .graphicsLayer { rotationZ = rotation },
+        ) {
+            val c = center
+            val r = size.minDimension / 2f
+            // Black disc.
+            drawCircle(color = Color(0xFF17181C), radius = r)
+            // Groove rings.
+            for (fraction in listOf(0.84f, 0.70f, 0.57f)) {
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.10f),
+                    radius = r * fraction,
+                    style = Stroke(width = 1.dp.toPx()),
+                )
+            }
+            // A light arc so the spin stays visible.
+            drawArc(
+                color = Color.White.copy(alpha = 0.35f),
+                startAngle = -40f,
+                sweepAngle = 70f,
+                useCenter = false,
+                style = Stroke(width = 2.dp.toPx()),
+                topLeft = Offset(c.x - r * 0.84f, c.y - r * 0.84f),
+                size = Size(r * 1.68f, r * 1.68f),
+            )
+            // Center label, an off-center dot and the spindle hole.
+            drawCircle(color = labelColor, radius = r * 0.38f)
+            drawCircle(
+                color = Color.White.copy(alpha = 0.85f),
+                radius = r * 0.07f,
+                center = Offset(c.x + r * 0.20f, c.y - r * 0.12f),
+            )
+            drawCircle(color = holeColor, radius = r * 0.09f)
+        }
+    }
 }
 
 /**
@@ -1070,7 +1159,10 @@ private fun FavoritesContent(
         }
         return
     }
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 16.dp),
+    ) {
         itemsIndexed(
             favorites,
             key = { index, _ -> index },
@@ -1132,7 +1224,10 @@ private fun ChartsContent(
                         }
 
                         else -> {
-                            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(bottom = 16.dp),
+                            ) {
                                 itemsIndexed(
                                     chartSongs,
                                     key = { index, _ -> index },
@@ -1237,142 +1332,6 @@ private fun MusicChartCard(chart: MusicChart, onClick: () -> Unit) {
     }
 }
 
-/** KV key for the floating source button position, stored as "x,y" px. */
-private const val KEY_SOURCE_FAB_POSITION = "music_source_fab_pos"
-
-private fun readSavedFabOffset(): IntOffset? {
-    // The default value matters: KV reads without one decode unregistered
-    // keys to null (the v1.9.0 import bug), so always pass "" here.
-    val raw: String = KV.get(KEY_SOURCE_FAB_POSITION, "")
-    if (raw.isBlank()) return null
-    val parts = raw.split(",")
-    if (parts.size != 2) return null
-    val x = parts[0].trim().toIntOrNull() ?: return null
-    val y = parts[1].trim().toIntOrNull() ?: return null
-    return IntOffset(x, y)
-}
-
-private fun saveFabOffset(offset: IntOffset) {
-    KV.put(KEY_SOURCE_FAB_POSITION, offset.x.toString() + "," + offset.y.toString())
-}
-
-/**
- * Draggable floating shortcut to the source-script dialog, overlaid on the
- * music page. A press whose total movement stays under ~8dp counts as a tap
- * and opens the dialog; anything longer drags the pill with the finger,
- * clamped to [boundsSize] so it can never leave the page, and the final
- * offset is reported via [onPersistOffset]. With no saved offset the pill
- * rests at the bottom-end of the page with a 16dp margin. The gesture is a
- * single awaitEachGesture loop because detectDragGestures never reports a
- * press that ends before the touch slop, which would make taps
- * indistinguishable from cancelled drags.
- */
-@Composable
-private fun MusicSourceFab(
-    boundsSize: IntSize,
-    savedOffset: IntOffset?,
-    enabled: Boolean,
-    onPersistOffset: (IntOffset) -> Unit,
-    onClick: () -> Unit,
-) {
-    var ownSize by remember { mutableStateOf(IntSize.Zero) }
-    var dragOffset by remember { mutableStateOf<IntOffset?>(null) }
-    val density = LocalDensity.current
-    val marginPx = with(density) { 16.dp.roundToPx() }
-    val clickThresholdPx = with(density) { 8.dp.roundToPx() }.toFloat()
-    val boundsState = rememberUpdatedState(boundsSize)
-    val savedState = rememberUpdatedState(savedOffset)
-    val enabledState = rememberUpdatedState(enabled)
-    val clickState = rememberUpdatedState(onClick)
-    val persistState = rememberUpdatedState(onPersistOffset)
-
-    fun clampToBounds(raw: IntOffset, btnSize: IntSize, area: IntSize): IntOffset {
-        val maxX = (area.width - btnSize.width).coerceAtLeast(0)
-        val maxY = (area.height - btnSize.height).coerceAtLeast(0)
-        return IntOffset(raw.x.coerceIn(0, maxX), raw.y.coerceIn(0, maxY))
-    }
-
-    fun restingOffset(): IntOffset {
-        val area = boundsState.value
-        val dragging = dragOffset
-        if (dragging != null) return dragging
-        val saved = savedState.value
-        if (saved != null) return clampToBounds(saved, ownSize, area)
-        return clampToBounds(
-            IntOffset(
-                area.width - ownSize.width - marginPx,
-                area.height - ownSize.height - marginPx,
-            ),
-            ownSize,
-            area,
-        )
-    }
-
-    val ready = boundsSize != IntSize.Zero && ownSize != IntSize.Zero
-    Surface(
-        modifier = Modifier
-            .alpha(if (ready) 1f else 0f)
-            .offset { if (ready) restingOffset() else IntOffset.Zero }
-            .onSizeChanged { ownSize = it }
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    down.consume()
-                    val startDragOffset = dragOffset
-                    var current = restingOffset()
-                    var movedPx = 0f
-                    var finished = false
-                    while (!finished) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id }
-                        if (change == null) {
-                            dragOffset = startDragOffset
-                            finished = true
-                        } else if (change.changedToUp()) {
-                            // Compose 1.12 has no separate cancel API
-                            // (changedToCanceled does not exist); a canceled
-                            // pointer also ends the gesture through here.
-                            change.consume()
-                            if (movedPx < clickThresholdPx) {
-                                // Tap: undo the few px of finger drift and
-                                // treat the press as a click.
-                                dragOffset = startDragOffset
-                                if (enabledState.value) clickState.value()
-                            } else {
-                                persistState.value(current)
-                            }
-                            finished = true
-                        } else {
-                            val delta = change.positionChange()
-                            if (delta != Offset.Zero) {
-                                change.consume()
-                                movedPx += delta.getDistance()
-                                current = clampToBounds(
-                                    IntOffset(
-                                        current.x + delta.x.roundToInt(),
-                                        current.y + delta.y.roundToInt(),
-                                    ),
-                                    ownSize,
-                                    boundsState.value,
-                                )
-                                dragOffset = current
-                            }
-                        }
-                    }
-                }
-            },
-        shape = CircleShape,
-        color = Color.Black.copy(alpha = 0.55f),
-        contentColor = Color.White,
-        shadowElevation = 6.dp,
-    ) {
-        Text(
-            text = stringResource(R.string.music_source_switch),
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-        )
-    }
-}
 
 @Composable
 private fun sourceLabel(code: String): String {
