@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -55,20 +56,31 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.changedToCanceled
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -79,6 +91,8 @@ import com.github.avbox.osc.music.MusicChart
 import com.github.avbox.osc.music.MusicTrack
 import com.github.avbox.osc.ui.components.AVBoxAlertDialog
 import com.github.avbox.osc.ui.music.LxMusicPlayerActivity
+import com.github.avbox.osc.util.KV
+import kotlin.math.roundToInt
 
 @Composable
 fun MusicPage(
@@ -105,6 +119,8 @@ fun MusicPage(
 
     var query by rememberSaveable { mutableStateOf("") }
     var scriptDialogOpen by remember { mutableStateOf(false) }
+    var rootSize by remember { mutableStateOf(IntSize.Zero) }
+    var fabOffset by remember { mutableStateOf(readSavedFabOffset()) }
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -120,174 +136,172 @@ fun MusicPage(
         }
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .padding(contentPadding)
             .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp)
+            .onSizeChanged { rootSize = it },
     ) {
-        Spacer(Modifier.height(12.dp))
-        // First row: the platform chips act as the resource-site switcher;
-        // the source-script button stays pinned to the right end.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            LazyRow(
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Column(modifier = Modifier.fillMaxSize()) {
+            Spacer(Modifier.height(12.dp))
+            // First row: the platform chips act as the resource-site switcher
+            // and span the full width; the source-script entry moved to the
+            // draggable floating button overlaid on the page.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                items(sources, key = { it.code }) { source ->
-                    FilterChip(
-                        selected = source.code == selectedSource,
-                        onClick = { vm.selectSource(source.code) },
-                        label = { Text(sourceLabel(source.code)) },
-                    )
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(sources, key = { it.code }) { source ->
+                        FilterChip(
+                            selected = source.code == selectedSource,
+                            onClick = { vm.selectSource(source.code) },
+                            label = { Text(sourceLabel(source.code)) },
+                        )
+                    }
                 }
             }
-            TextButton(
-                onClick = { scriptDialogOpen = true },
-                enabled = !scriptBusy,
+
+            // Second row: search / charts mode switch.
+            Row(
+                modifier = Modifier.padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(stringResource(R.string.music_source_switch))
-            }
-        }
-
-        // Second row: search / charts mode switch.
-        Row(
-            modifier = Modifier.padding(top = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            FilterChip(
-                selected = mode == MusicMode.SEARCH,
-                onClick = { vm.selectMode(MusicMode.SEARCH) },
-                label = { Text(stringResource(R.string.music_tab_search)) },
-            )
-            FilterChip(
-                selected = mode == MusicMode.CHARTS,
-                onClick = { vm.selectMode(MusicMode.CHARTS) },
-                label = { Text(stringResource(R.string.music_tab_charts)) },
-            )
-        }
-
-        BackHandler(enabled = mode == MusicMode.CHARTS && selectedChart != null) {
-            vm.closeChart()
-        }
-
-        Box(modifier = Modifier.fillMaxSize()) {
-            if (mode == MusicMode.CHARTS) {
-                ChartsContent(
-                    charts = charts,
-                    chartSongs = chartSongs,
-                    selectedChart = selectedChart,
-                    chartsLoading = chartsLoading,
-                    chartSongsLoading = chartSongsLoading,
-                    onOpenChart = { vm.openChart(it) },
-                    onCloseChart = { vm.closeChart() },
-                    onPlayChartSong = { index ->
-                        LxMusicPlayerActivity.start(
-                            context,
-                            MusicTrack.listToJson(chartSongs),
-                            index,
-                        )
-                    },
+                FilterChip(
+                    selected = mode == MusicMode.SEARCH,
+                    onClick = { vm.selectMode(MusicMode.SEARCH) },
+                    label = { Text(stringResource(R.string.music_tab_search)) },
                 )
-            } else {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    MusicSearchField(
-                        query = query,
-                        onQueryChange = { query = it },
-                        onSearch = { vm.search(query) },
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                    ) {
-                        when {
-                            loading -> {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.align(Alignment.Center),
-                                )
-                            }
+                FilterChip(
+                    selected = mode == MusicMode.CHARTS,
+                    onClick = { vm.selectMode(MusicMode.CHARTS) },
+                    label = { Text(stringResource(R.string.music_tab_charts)) },
+                )
+            }
 
-                            results.isNotEmpty() -> {
-                                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                    itemsIndexed(
-                                        results,
-                                        key = { index, _ -> index },
-                                    ) { index, track ->
-                                        if (index >= results.size - 5) {
-                                            LaunchedEffect(index) { vm.loadMore() }
+            BackHandler(enabled = mode == MusicMode.CHARTS && selectedChart != null) {
+                vm.closeChart()
+            }
+
+            Box(modifier = Modifier.fillMaxSize()) {
+                if (mode == MusicMode.CHARTS) {
+                    ChartsContent(
+                        charts = charts,
+                        chartSongs = chartSongs,
+                        selectedChart = selectedChart,
+                        chartsLoading = chartsLoading,
+                        chartSongsLoading = chartSongsLoading,
+                        onOpenChart = { vm.openChart(it) },
+                        onCloseChart = { vm.closeChart() },
+                        onPlayChartSong = { index ->
+                            LxMusicPlayerActivity.start(
+                                context,
+                                MusicTrack.listToJson(chartSongs),
+                                index,
+                            )
+                        },
+                    )
+                } else {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        MusicSearchField(
+                            query = query,
+                            onQueryChange = { query = it },
+                            onSearch = { vm.search(query) },
+                            modifier = Modifier.padding(top = 12.dp),
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                        ) {
+                            when {
+                                loading -> {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.align(Alignment.Center),
+                                    )
+                                }
+
+                                results.isNotEmpty() -> {
+                                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                        itemsIndexed(
+                                            results,
+                                            key = { index, _ -> index },
+                                        ) { index, track ->
+                                            if (index >= results.size - 5) {
+                                                LaunchedEffect(index) { vm.loadMore() }
+                                            }
+                                            MusicTrackRow(
+                                                track = track,
+                                                onClick = {
+                                                    LxMusicPlayerActivity.start(
+                                                        context,
+                                                        MusicTrack.listToJson(results),
+                                                        index,
+                                                    )
+                                                },
+                                            )
                                         }
-                                        MusicTrackRow(
-                                            track = track,
-                                            onClick = {
-                                                LxMusicPlayerActivity.start(
-                                                    context,
-                                                    MusicTrack.listToJson(results),
-                                                    index,
-                                                )
-                                            },
-                                        )
-                                    }
-                                    if (loadingMore) {
-                                        item {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(16.dp),
-                                                contentAlignment = Alignment.Center,
-                                            ) {
-                                                CircularProgressIndicator(
-                                                    modifier = Modifier.size(24.dp),
-                                                )
+                                        if (loadingMore) {
+                                            item {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(16.dp),
+                                                    contentAlignment = Alignment.Center,
+                                                ) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(24.dp),
+                                                    )
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            }
 
-                            searched -> {
-                                Text(
-                                    text = stringResource(R.string.music_empty_result),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.align(Alignment.Center),
-                                )
-                            }
+                                searched -> {
+                                    Text(
+                                        text = stringResource(R.string.music_empty_result),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.align(Alignment.Center),
+                                    )
+                                }
 
-                            else -> {
-                                Column(modifier = Modifier.fillMaxSize()) {
-                                    if (scriptBusy) {
-                                        Text(
-                                            text = stringResource(R.string.music_script_loading),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(top = 24.dp),
-                                        )
-                                    }
-                                    if (hotWords.isNotEmpty()) {
-                                        Text(
-                                            text = stringResource(R.string.music_hot_title),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            modifier = Modifier.padding(top = 24.dp, bottom = 12.dp),
-                                        )
-                                        FlowRow(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                                        ) {
-                                            hotWords.forEach { word ->
-                                                FilterChip(
-                                                    selected = false,
-                                                    onClick = {
-                                                        query = word
-                                                        vm.search(word)
-                                                    },
-                                                    label = { Text(word) },
-                                                )
+                                else -> {
+                                    Column(modifier = Modifier.fillMaxSize()) {
+                                        if (scriptBusy) {
+                                            Text(
+                                                text = stringResource(R.string.music_script_loading),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(top = 24.dp),
+                                            )
+                                        }
+                                        if (hotWords.isNotEmpty()) {
+                                            Text(
+                                                text = stringResource(R.string.music_hot_title),
+                                                style = MaterialTheme.typography.titleMedium,
+                                                modifier = Modifier.padding(top = 24.dp, bottom = 12.dp),
+                                            )
+                                            FlowRow(
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                hotWords.forEach { word ->
+                                                    FilterChip(
+                                                        selected = false,
+                                                        onClick = {
+                                                            query = word
+                                                            vm.search(word)
+                                                        },
+                                                        label = { Text(word) },
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -298,6 +312,16 @@ fun MusicPage(
                 }
             }
         }
+        MusicSourceFab(
+            boundsSize = rootSize,
+            savedOffset = fabOffset,
+            enabled = !scriptBusy,
+            onPersistOffset = { offset ->
+                fabOffset = offset
+                saveFabOffset(offset)
+            },
+            onClick = { scriptDialogOpen = true },
+        )
     }
 
     if (scriptDialogOpen) {
@@ -606,6 +630,143 @@ private fun MusicChartCard(chart: MusicChart, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+/** KV key for the floating source button position, stored as "x,y" px. */
+private const val KEY_SOURCE_FAB_POSITION = "music_source_fab_pos"
+
+private fun readSavedFabOffset(): IntOffset? {
+    // The default value matters: KV reads without one decode unregistered
+    // keys to null (the v1.9.0 import bug), so always pass "" here.
+    val raw: String = KV.get(KEY_SOURCE_FAB_POSITION, "")
+    if (raw.isBlank()) return null
+    val parts = raw.split(",")
+    if (parts.size != 2) return null
+    val x = parts[0].trim().toIntOrNull() ?: return null
+    val y = parts[1].trim().toIntOrNull() ?: return null
+    return IntOffset(x, y)
+}
+
+private fun saveFabOffset(offset: IntOffset) {
+    KV.put(KEY_SOURCE_FAB_POSITION, offset.x.toString() + "," + offset.y.toString())
+}
+
+/**
+ * Draggable floating shortcut to the source-script dialog, overlaid on the
+ * music page. A press whose total movement stays under ~8dp counts as a tap
+ * and opens the dialog; anything longer drags the pill with the finger,
+ * clamped to [boundsSize] so it can never leave the page, and the final
+ * offset is reported via [onPersistOffset]. With no saved offset the pill
+ * rests at the bottom-end of the page with a 16dp margin. The gesture is a
+ * single awaitEachGesture loop because detectDragGestures never reports a
+ * press that ends before the touch slop, which would make taps
+ * indistinguishable from cancelled drags.
+ */
+@Composable
+private fun MusicSourceFab(
+    boundsSize: IntSize,
+    savedOffset: IntOffset?,
+    enabled: Boolean,
+    onPersistOffset: (IntOffset) -> Unit,
+    onClick: () -> Unit,
+) {
+    var ownSize by remember { mutableStateOf(IntSize.Zero) }
+    var dragOffset by remember { mutableStateOf<IntOffset?>(null) }
+    val density = LocalDensity.current
+    val marginPx = with(density) { 16.dp.roundToPx() }
+    val clickThresholdPx = with(density) { 8.dp.roundToPx() }.toFloat()
+    val boundsState = rememberUpdatedState(boundsSize)
+    val savedState = rememberUpdatedState(savedOffset)
+    val enabledState = rememberUpdatedState(enabled)
+    val clickState = rememberUpdatedState(onClick)
+    val persistState = rememberUpdatedState(onPersistOffset)
+
+    fun clampToBounds(raw: IntOffset, btnSize: IntSize, area: IntSize): IntOffset {
+        val maxX = (area.width - btnSize.width).coerceAtLeast(0)
+        val maxY = (area.height - btnSize.height).coerceAtLeast(0)
+        return IntOffset(raw.x.coerceIn(0, maxX), raw.y.coerceIn(0, maxY))
+    }
+
+    fun restingOffset(): IntOffset {
+        val area = boundsState.value
+        val dragging = dragOffset
+        if (dragging != null) return dragging
+        val saved = savedState.value
+        if (saved != null) return clampToBounds(saved, ownSize, area)
+        return clampToBounds(
+            IntOffset(
+                area.width - ownSize.width - marginPx,
+                area.height - ownSize.height - marginPx,
+            ),
+            ownSize,
+            area,
+        )
+    }
+
+    val ready = boundsSize != IntSize.Zero && ownSize != IntSize.Zero
+    Surface(
+        modifier = Modifier
+            .alpha(if (ready) 1f else 0f)
+            .offset { if (ready) restingOffset() else IntOffset.Zero }
+            .onSizeChanged { ownSize = it }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    val startDragOffset = dragOffset
+                    var current = restingOffset()
+                    var movedPx = 0f
+                    var finished = false
+                    while (!finished) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        if (change == null) {
+                            dragOffset = startDragOffset
+                            finished = true
+                        } else if (change.changedToUp()) {
+                            change.consume()
+                            if (movedPx < clickThresholdPx) {
+                                // Tap: undo the few px of finger drift and
+                                // treat the press as a click.
+                                dragOffset = startDragOffset
+                                if (enabledState.value) clickState.value()
+                            } else {
+                                persistState.value(current)
+                            }
+                            finished = true
+                        } else if (change.changedToCanceled()) {
+                            dragOffset = startDragOffset
+                            finished = true
+                        } else {
+                            val delta = change.positionChange()
+                            if (delta != Offset.Zero) {
+                                change.consume()
+                                movedPx += delta.getDistance()
+                                current = clampToBounds(
+                                    IntOffset(
+                                        current.x + delta.x.roundToInt(),
+                                        current.y + delta.y.roundToInt(),
+                                    ),
+                                    ownSize,
+                                    boundsState.value,
+                                )
+                                dragOffset = current
+                            }
+                        }
+                    }
+                }
+            },
+        shape = CircleShape,
+        color = Color.Black.copy(alpha = 0.55f),
+        contentColor = Color.White,
+        shadowElevation = 6.dp,
+    ) {
+        Text(
+            text = stringResource(R.string.music_source_switch),
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        )
     }
 }
 

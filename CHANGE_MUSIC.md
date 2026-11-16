@@ -292,3 +292,25 @@ lyricLines 数据与 MusicLrc 解析，不新造管线。沉浸模式保留最�
 - 已知限制：服务里只持当前一首 MediaItem，系统通知 / 锁屏上
   只有播放暂停（上一首 / 下一首在 App 内），与原单曲解析模型
   一致；影视播放器（ui.MusicPlayerActivity、player 包）未动。
+
+## v1.9.1 悬浮音源按钮
+
+- 音乐页第一行的「音源」TextButton 删掉，平台 chips 的 LazyRow
+  改为占满整行宽度；原内容 Column 包进根 Box，Box 沿用同一套
+  contentPadding / 状态栏 inset / 水平 16dp，所以悬浮按钮的活动
+  范围就是原内容区，不会压到底部导航、也进不了状态栏。
+- 新增 MusicSourceFab（MusicPage.kt 内私有 Composable）：胶囊形
+  半透明深色底 + 白字 + 6dp 阴影，叠在根 Box 最上层（弹窗在独立
+  窗口，层级仍在它之下）。默认停在内容区右下角（16dp 边距）。
+- 拖动 / 点击判定：单个 pointerInput + awaitEachGesture 自行跟
+  踪位移——detectDragGestures 对未过 touch slop 的轻点不回调，
+  无法区分点击与取消，故不用它。按下后累计位移 < 8dp 判为点击
+  （打开原有音源弹窗，并回滚几 px 的手指漂移），≥ 8dp 为拖动，
+  跟手移动且每步按根 Box 实测尺寸 clamp；取消则回滚。手势只
+  consume 按钮自身区域的事件，不挡底下榜单网格滚动与点击；
+  scriptBusy 时点击不打开弹窗（与原 TextButton 的 disabled 一致），
+  拖动不受影响。
+- 位置持久化：松手时以 "x,y"（px）写 KV 的 music_source_fab_pos，
+  读取带 "" 默认值（避开无默认值读未注册 key 恒 null 的坑）；
+  页面切走切回、杀 App 重开都恢复上次位置，恢复时同样 clamp。
+- 弹窗、MusicViewModel、LxBridge、播放器、MusicApi 均未动。
