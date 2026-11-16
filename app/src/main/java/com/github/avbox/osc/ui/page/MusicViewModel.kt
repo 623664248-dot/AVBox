@@ -10,6 +10,8 @@ import com.github.avbox.osc.music.LxUserScripts
 import com.github.avbox.osc.music.MusicApi
 import com.github.avbox.osc.music.MusicChart
 import com.github.avbox.osc.music.MusicTrack
+import com.github.avbox.osc.music.PyMusicBridge
+import com.github.avbox.osc.music.PyMusicSources
 import com.github.avbox.osc.util.AppContextHolder
 import com.github.avbox.osc.util.KV
 import com.github.avbox.osc.util.LanguageManager
@@ -38,6 +40,20 @@ class MusicViewModel : ViewModel() {
         val label: String,
         val selected: Boolean,
         val user: Boolean = false,
+        /** Py spider source; its id is "py:" + the PyMusicSources slug. */
+        val py: Boolean = false,
+    )
+
+    /** A play request the page fulfils by opening the player activity. */
+    data class PyPlayRequest(
+        val queue: List<MusicTrack>,
+        val index: Int,
+    )
+
+    /** Episode choice for a multi-episode (album/playlist) py vod. */
+    data class PyEpisodePicker(
+        val title: String,
+        val episodes: List<MusicTrack>,
     )
 
     private val _hotWords = MutableStateFlow<List<String>>(emptyList())
@@ -88,6 +104,40 @@ class MusicViewModel : ViewModel() {
     private val _scriptBusy = MutableStateFlow(true)
     val scriptBusy: StateFlow<Boolean> = _scriptBusy.asStateFlow()
 
+    // ------------------------------------------------------------- py mode
+
+    /** True while a py spider source is the selected music source. */
+    private val _pyActive = MutableStateFlow(false)
+    val pyActive: StateFlow<Boolean> = _pyActive.asStateFlow()
+
+    private val _pyClasses = MutableStateFlow<List<PyMusicBridge.PyClass>>(emptyList())
+    val pyClasses: StateFlow<List<PyMusicBridge.PyClass>> = _pyClasses.asStateFlow()
+
+    private val _selectedPyClass = MutableStateFlow("")
+    val selectedPyClass: StateFlow<String> = _selectedPyClass.asStateFlow()
+
+    /** Current spider list: a category page feed or search results. */
+    private val _pyItems = MutableStateFlow<List<MusicTrack>>(emptyList())
+    val pyItems: StateFlow<List<MusicTrack>> = _pyItems.asStateFlow()
+
+    private val _pyLoading = MutableStateFlow(false)
+    val pyLoading: StateFlow<Boolean> = _pyLoading.asStateFlow()
+
+    private val _pyLoadingMore = MutableStateFlow(false)
+    val pyLoadingMore: StateFlow<Boolean> = _pyLoadingMore.asStateFlow()
+
+    private val _pySearchActive = MutableStateFlow(false)
+    val pySearchActive: StateFlow<Boolean> = _pySearchActive.asStateFlow()
+
+    private val _pyDetailLoading = MutableStateFlow(false)
+    val pyDetailLoading: StateFlow<Boolean> = _pyDetailLoading.asStateFlow()
+
+    private val _pendingPyPlay = MutableStateFlow<PyPlayRequest?>(null)
+    val pendingPyPlay: StateFlow<PyPlayRequest?> = _pendingPyPlay.asStateFlow()
+
+    private val _episodePicker = MutableStateFlow<PyEpisodePicker?>(null)
+    val episodePicker: StateFlow<PyEpisodePicker?> = _episodePicker.asStateFlow()
+
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
@@ -100,15 +150,40 @@ class MusicViewModel : ViewModel() {
 
     private var userDefs: List<LxBridge.ScriptDef> = emptyList()
 
+    private var pyDefs: List<PyMusicSources.PyDef> = emptyList()
+    private var currentPyDef: PyMusicSources.PyDef? = null
+    private var pyPage: Int = 1
+    private var pyHasMore: Boolean = false
+    private var pyKeyword: String = ""
+    private var pySeq: Int = 0
+
     init {
         reloadUserDefs()
+        reloadPyDefs()
         refreshScriptOptions(selectedId = savedScriptId())
         viewModelScope.launch {
-            val saved = savedScriptId()
-            if (!initBridge(saved) && saved != LxBridge.SCRIPTS.first().id) {
-                // The remembered script (e.g. an imported one) no longer
-                // loads; fall back to the default built-in so the tab works.
-                initBridge(LxBridge.SCRIPTS.first().id)
+            // A remembered py source re-activates in spider mode; when it
+            // no longer loads, fall through to the JS default below.
+            var started = false
+            val saved: String = KV.get(KV_SCRIPT_ID, "")
+            if (saved.startsWith(MusicTrack.PY_SOURCE_PREFIX)) {
+                val def = pyDefs.firstOrNull {
+                    MusicTrack.PY_SOURCE_PREFIX + it.id == saved
+                }
+                if (def != null) {
+                    started = activatePy(def, persist = false)
+                }
+            }
+            if (!started) {
+                val savedJs = savedScriptId()
+                val target = savedJs.takeUnless {
+                    it.startsWith(MusicTrack.PY_SOURCE_PREFIX)
+                } ?: LxBridge.SCRIPTS.first().id
+                if (!initBridge(target) && target != LxBridge.SCRIPTS.first().id) {
+                    // The remembered script (e.g. an imported one) no longer
+                    // loads; fall back to the default built-in so the tab works.
+                    initBridge(LxBridge.SCRIPTS.first().id)
+                }
             }
             // Charts is the default mode: once the platform list is ready,
             // load its catalog. Script switches and platform changes reload
@@ -131,6 +206,11 @@ class MusicViewModel : ViewModel() {
     private fun reloadUserDefs() {
         val context = AppContextHolder.context() ?: return
         userDefs = LxUserScripts.loadDefs(context)
+    }
+
+    private fun reloadPyDefs() {
+        val context = AppContextHolder.context() ?: return
+        pyDefs = PyMusicSources.loadDefs(context)
     }
 
     /**
@@ -178,12 +258,23 @@ class MusicViewModel : ViewModel() {
     }
 
     fun switchScript(id: String) {
-        if (id == LxBridge.loadedScriptId && _sources.value.isNotEmpty()) return
+        if (id.startsWith(MusicTrack.PY_SOURCE_PREFIX)) {
+            val def = pyDefs.firstOrNull {
+                MusicTrack.PY_SOURCE_PREFIX + it.id == id
+            } ?: return
+            if (_pyActive.value && currentPyDef?.id == def.id) return
+            refreshScriptOptions(selectedId = id)
+            viewModelScope.launch { activatePy(def, persist = true) }
+            return
+        }
+        if (id == LxBridge.loadedScriptId && _sources.value.isNotEmpty() && !_pyActive.value) return
         val previousId = LxBridge.loadedScriptId
         refreshScriptOptions(selectedId = id)
         viewModelScope.launch {
             if (initBridge(id)) {
                 // Only persist the choice once the script actually works.
+                _pyActive.value = false
+                currentPyDef = null
                 KV.put(KV_SCRIPT_ID, id)
                 if (lastKeyword.isNotEmpty() && _selectedSource.value.isNotEmpty()) {
                     search(lastKeyword)
@@ -196,6 +287,8 @@ class MusicViewModel : ViewModel() {
                 // so the tab is not left with an empty platform list.
                 refreshScriptOptions(selectedId = previousId)
                 if (initBridge(previousId)) {
+                    _pyActive.value = false
+                    currentPyDef = null
                     KV.put(KV_SCRIPT_ID, previousId)
                 }
             }
@@ -237,11 +330,229 @@ class MusicViewModel : ViewModel() {
         }
     }
 
+    // ------------------------------------------------------------- py sources
+
+    /**
+     * Loads [def]'s homeContent and enters spider mode. State is only
+     * mutated on success: when the spider fails to load, the previously
+     * working source (JS or py) stays selected and a toast gives the
+     * reason. Returns whether spider mode was entered.
+     */
+    private suspend fun activatePy(def: PyMusicSources.PyDef, persist: Boolean): Boolean {
+        val context = AppContextHolder.context() ?: return false
+        _scriptBusy.value = true
+        return try {
+            val home = PyMusicBridge.home(context, def)
+            currentPyDef = def
+            _pyActive.value = true
+            _pyClasses.value = home.classes
+            _pySearchActive.value = false
+            pyKeyword = ""
+            pyPage = 1
+            pyHasMore = false
+            if (persist) KV.put(KV_SCRIPT_ID, MusicTrack.PY_SOURCE_PREFIX + def.id)
+            refreshScriptOptions(selectedId = MusicTrack.PY_SOURCE_PREFIX + def.id)
+            _messages.tryEmit(str(R.string.music_script_ready, def.name))
+            val firstClass = home.classes.firstOrNull()
+            _selectedPyClass.value = firstClass?.id ?: ""
+            if (firstClass != null) {
+                loadPyList(reset = true)
+            } else {
+                // No categories: fall back to whatever homeContent listed.
+                _pyItems.value = home.items
+            }
+            true
+        } catch (e: Exception) {
+            _messages.tryEmit(str(R.string.music_py_load_failed, e.message ?: ""))
+            // The previously working source stays in charge; point the
+            // option highlight back at it (py source if one is active,
+            // else whichever JS script the bridge still holds).
+            val activePy = currentPyDef
+            val activeId = when {
+                _pyActive.value && activePy != null ->
+                    MusicTrack.PY_SOURCE_PREFIX + activePy.id
+                LxBridge.loadedScriptId != null -> LxBridge.loadedScriptId!!
+                else -> selectedScriptId()
+            }
+            refreshScriptOptions(selectedId = activeId)
+            false
+        } finally {
+            _scriptBusy.value = false
+        }
+    }
+
+    /** Imports a user-picked .py spider, then switches to it. */
+    fun importPyScript(uri: Uri) {
+        val context = AppContextHolder.context() ?: return
+        viewModelScope.launch {
+            try {
+                val def = withContext(Dispatchers.IO) {
+                    PyMusicSources.importScript(context, uri)
+                }
+                reloadPyDefs()
+                refreshScriptOptions(selectedId = selectedScriptId())
+                _messages.tryEmit(str(R.string.music_source_imported, def.name))
+                switchScript(MusicTrack.PY_SOURCE_PREFIX + def.id)
+            } catch (e: Exception) {
+                _messages.tryEmit(str(R.string.music_py_import_failed, e.message ?: ""))
+            }
+        }
+    }
+
+    /** Deletes a user-imported py spider; falls back to the JS default if in use. */
+    fun deletePyScript(optionId: String) {
+        val defId = optionId.removePrefix(MusicTrack.PY_SOURCE_PREFIX)
+        val def = pyDefs.firstOrNull { it.id == defId && it.user } ?: return
+        val context = AppContextHolder.context() ?: return
+        val wasInUse = _pyActive.value && currentPyDef?.id == def.id
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { PyMusicSources.delete(context, def.id) }
+            reloadPyDefs()
+            _messages.tryEmit(str(R.string.music_source_deleted))
+            if (wasInUse) {
+                currentPyDef = null
+                _pyActive.value = false
+                switchScript(LxBridge.SCRIPTS.first().id)
+            } else {
+                refreshScriptOptions(selectedId = selectedScriptId())
+            }
+        }
+    }
+
+    fun selectPyClass(typeId: String) {
+        if (!_pyActive.value) return
+        if (typeId == _selectedPyClass.value && !_pySearchActive.value) return
+        _selectedPyClass.value = typeId
+        _pySearchActive.value = false
+        pyKeyword = ""
+        loadPyList(reset = true)
+    }
+
+    fun pySearch(keyword: String) {
+        val kw = keyword.trim()
+        if (kw.isEmpty() || !_pyActive.value) return
+        pyKeyword = kw
+        _pySearchActive.value = true
+        loadPyList(reset = true)
+    }
+
+    /** Leaves spider search results and reloads the selected category. */
+    fun pyClearSearch() {
+        if (!_pySearchActive.value) return
+        _pySearchActive.value = false
+        pyKeyword = ""
+        loadPyList(reset = true)
+    }
+
+    fun pyLoadMore() {
+        loadPyList(reset = false)
+    }
+
+    private fun loadPyList(reset: Boolean) {
+        val def = currentPyDef ?: return
+        val context = AppContextHolder.context() ?: return
+        if (reset) {
+            pyPage = 1
+            pyHasMore = true
+            _pyLoading.value = true
+        } else {
+            if (_pyLoading.value || _pyLoadingMore.value || !pyHasMore) return
+            _pyLoadingMore.value = true
+        }
+        val seq = ++pySeq
+        val targetPage = if (reset) 1 else pyPage + 1
+        val searching = _pySearchActive.value
+        val keyword = pyKeyword
+        val typeId = _selectedPyClass.value
+        viewModelScope.launch {
+            try {
+                val result = if (searching) {
+                    PyMusicBridge.search(context, def, keyword, targetPage)
+                } else {
+                    PyMusicBridge.category(context, def, typeId, targetPage)
+                }
+                if (seq != pySeq) return@launch
+                pyPage = targetPage
+                pyHasMore = result.items.isNotEmpty() &&
+                    (result.pageCount <= 0 || targetPage < result.pageCount)
+                _pyItems.value = if (reset) {
+                    result.items
+                } else {
+                    appendDedup(_pyItems.value, result.items)
+                }
+            } catch (e: Exception) {
+                if (seq == pySeq) {
+                    _messages.tryEmit(str(R.string.music_py_load_failed, e.message ?: ""))
+                }
+            } finally {
+                if (seq == pySeq) {
+                    _pyLoading.value = false
+                    _pyLoadingMore.value = false
+                }
+            }
+        }
+    }
+
+    /** Spiders often repeat page 1 when asked past the end; dedupe appends. */
+    private fun appendDedup(
+        old: List<MusicTrack>,
+        new: List<MusicTrack>,
+    ): List<MusicTrack> {
+        if (new.isEmpty()) return old
+        val seen = old.mapTo(HashSet()) { it.songmid + "|" + it.name }
+        return old + new.filterNot { (it.songmid + "|" + it.name) in seen }
+    }
+
+    /**
+     * A tap on a spider list row: one-episode vods play directly with the
+     * current list as the queue (each row resolves lazily at its turn);
+     * multi-episode vods (albums/playlists) open the episode picker and
+     * the chosen episode list becomes the queue.
+     */
+    fun onPyTrackClick(track: MusicTrack) {
+        val def = currentPyDef ?: return
+        val context = AppContextHolder.context() ?: return
+        if (_pyDetailLoading.value) return
+        _pyDetailLoading.value = true
+        viewModelScope.launch {
+            try {
+                val episodes = PyMusicBridge.detailEpisodes(context, def, track)
+                if (episodes.size <= 1) {
+                    val queue = _pyItems.value
+                    val index = queue.indexOfFirst {
+                        it.songmid == track.songmid && it.name == track.name
+                    }
+                    _pendingPyPlay.value = PyPlayRequest(queue, if (index >= 0) index else 0)
+                } else {
+                    _episodePicker.value = PyEpisodePicker(track.name, episodes)
+                }
+            } catch (e: Exception) {
+                _messages.tryEmit(str(R.string.music_py_load_failed, e.message ?: ""))
+            } finally {
+                _pyDetailLoading.value = false
+            }
+        }
+    }
+
+    fun consumePyPlay() {
+        _pendingPyPlay.value = null
+    }
+
+    fun dismissEpisodePicker() {
+        _episodePicker.value = null
+    }
+
+    fun playEpisode(index: Int) {
+        val picker = _episodePicker.value ?: return
+        _episodePicker.value = null
+        _pendingPyPlay.value = PyPlayRequest(picker.episodes, index)
+    }
+
     private fun selectedScriptId(): String =
         _scriptOptions.value.firstOrNull { it.selected }?.id ?: savedScriptId()
 
     private fun refreshScriptOptions(selectedId: String, info: LxBridge.ScriptInfo? = null) {
-        _scriptOptions.value = allDefs().map { def ->
+        val jsOptions = allDefs().map { def ->
             val label = when {
                 def.id == selectedId && info != null -> (info.name + " " + info.version).trim()
                 def.version.isNotEmpty() -> (def.fallbackName + " " + def.version).trim()
@@ -254,6 +565,16 @@ class MusicViewModel : ViewModel() {
                 user = def.filePath != null,
             )
         }
+        val pyOptions = pyDefs.map { def ->
+            ScriptOption(
+                id = MusicTrack.PY_SOURCE_PREFIX + def.id,
+                label = def.name,
+                selected = MusicTrack.PY_SOURCE_PREFIX + def.id == selectedId,
+                user = def.user,
+                py = true,
+            )
+        }
+        _scriptOptions.value = jsOptions + pyOptions
     }
 
     private fun savedScriptId(): String {
@@ -261,6 +582,11 @@ class MusicViewModel : ViewModel() {
         // registered in the KVKeySpec table when no default is given, which
         // made the saved script choice never persist. "" means "not saved".
         val saved: String = KV.get(KV_SCRIPT_ID, "")
+        if (saved.startsWith(MusicTrack.PY_SOURCE_PREFIX)) {
+            return saved.takeIf { id ->
+                pyDefs.any { MusicTrack.PY_SOURCE_PREFIX + it.id == id }
+            } ?: LxBridge.SCRIPTS.first().id
+        }
         return saved.takeIf { id -> id.isNotEmpty() && allDefs().any { it.id == id } }
             ?: LxBridge.SCRIPTS.first().id
     }

@@ -237,6 +237,14 @@
     <string name="music_source_import_failed">音源导入失败：%1$s</string>
     <string name="music_source_delete">删除音源</string>
     <string name="music_source_deleted">音源已删除</string>
+    <string name="music_py_section">py 音乐站点</string>
+    <string name="music_py_import">导入 py 音源</string>
+    <string name="music_py_parse_unsupported">该源需要解析，暂不支持</string>
+    <string name="music_py_load_failed">py 音源加载失败：%1$s</string>
+    <string name="music_py_import_failed">py 音源导入失败：%1$s</string>
+    <string name="music_py_back_category">返回分类</string>
+    <string name="music_py_choose_episode">选择剧集</string>
+    <string name="music_py_source_missing">py 音源不存在</string>
     <string name="music_tab_search">搜索</string>
     <string name="music_tab_charts">排行榜</string>
     <string name="music_charts_empty">暂无榜单</string>

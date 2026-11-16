@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -121,6 +122,16 @@ fun MusicPage(
     val chartsLoading by vm.chartsLoading.collectAsStateWithLifecycle()
     val chartSongsLoading by vm.chartSongsLoading.collectAsStateWithLifecycle()
     val favorites by vm.favorites.collectAsStateWithLifecycle()
+    val pyActive by vm.pyActive.collectAsStateWithLifecycle()
+    val pyClasses by vm.pyClasses.collectAsStateWithLifecycle()
+    val selectedPyClass by vm.selectedPyClass.collectAsStateWithLifecycle()
+    val pyItems by vm.pyItems.collectAsStateWithLifecycle()
+    val pyLoading by vm.pyLoading.collectAsStateWithLifecycle()
+    val pyLoadingMore by vm.pyLoadingMore.collectAsStateWithLifecycle()
+    val pySearchActive by vm.pySearchActive.collectAsStateWithLifecycle()
+    val pyDetailLoading by vm.pyDetailLoading.collectAsStateWithLifecycle()
+    val pendingPyPlay by vm.pendingPyPlay.collectAsStateWithLifecycle()
+    val episodePicker by vm.episodePicker.collectAsStateWithLifecycle()
 
     var query by rememberSaveable { mutableStateOf("") }
     var scriptDialogOpen by remember { mutableStateOf(false) }
@@ -132,6 +143,24 @@ fun MusicPage(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri != null) vm.importScript(uri)
+    }
+
+    val pyImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) vm.importPyScript(uri)
+    }
+
+    // Spider-mode play requests (single-episode vods and picked episodes)
+    // open the shared player activity with the queue the ViewModel built.
+    LaunchedEffect(pendingPyPlay) {
+        val request = pendingPyPlay ?: return@LaunchedEffect
+        LxMusicPlayerActivity.start(
+            context,
+            MusicTrack.listToJson(request.queue),
+            request.index,
+        )
+        vm.consumePyPlay()
     }
 
     LaunchedEffect(vm) {
@@ -169,18 +198,32 @@ fun MusicPage(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(sources, key = { it.code }) { source ->
-                        FilterChip(
-                            selected = source.code == selectedSource,
-                            onClick = { vm.selectSource(source.code) },
-                            label = { Text(sourceLabel(source.code)) },
-                        )
+                    if (pyActive) {
+                        // Spider mode: the first row switches the spider's
+                        // own homeContent categories instead of platforms.
+                        items(pyClasses, key = { it.id }) { pyClass ->
+                            FilterChip(
+                                selected = pyClass.id == selectedPyClass && !pySearchActive,
+                                onClick = { vm.selectPyClass(pyClass.id) },
+                                label = { Text(pyClass.name) },
+                            )
+                        }
+                    } else {
+                        items(sources, key = { it.code }) { source ->
+                            FilterChip(
+                                selected = source.code == selectedSource,
+                                onClick = { vm.selectSource(source.code) },
+                                label = { Text(sourceLabel(source.code)) },
+                            )
+                        }
                     }
                 }
             }
 
             // Second row: search / charts / favourites mode switch,
-            // appearance at the end.
+            // appearance at the end. The mode chips are hidden in spider
+            // mode (a py source has no platform charts), while the native
+            // mode state is left untouched; appearance stays available.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -188,21 +231,23 @@ fun MusicPage(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                FilterChip(
-                    selected = mode == MusicMode.SEARCH,
-                    onClick = { vm.selectMode(MusicMode.SEARCH) },
-                    label = { Text(stringResource(R.string.music_tab_search)) },
-                )
-                FilterChip(
-                    selected = mode == MusicMode.CHARTS,
-                    onClick = { vm.selectMode(MusicMode.CHARTS) },
-                    label = { Text(stringResource(R.string.music_tab_charts)) },
-                )
-                FilterChip(
-                    selected = mode == MusicMode.FAVORITES,
-                    onClick = { vm.selectMode(MusicMode.FAVORITES) },
-                    label = { Text(stringResource(R.string.music_favorites_title)) },
-                )
+                if (!pyActive) {
+                    FilterChip(
+                        selected = mode == MusicMode.SEARCH,
+                        onClick = { vm.selectMode(MusicMode.SEARCH) },
+                        label = { Text(stringResource(R.string.music_tab_search)) },
+                    )
+                    FilterChip(
+                        selected = mode == MusicMode.CHARTS,
+                        onClick = { vm.selectMode(MusicMode.CHARTS) },
+                        label = { Text(stringResource(R.string.music_tab_charts)) },
+                    )
+                    FilterChip(
+                        selected = mode == MusicMode.FAVORITES,
+                        onClick = { vm.selectMode(MusicMode.FAVORITES) },
+                        label = { Text(stringResource(R.string.music_favorites_title)) },
+                    )
+                }
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = { appearanceOpen = true }) {
                     Icon(
@@ -217,7 +262,25 @@ fun MusicPage(
             }
 
             Box(modifier = Modifier.fillMaxSize()) {
-                if (mode == MusicMode.FAVORITES) {
+                if (pyActive) {
+                    PySpiderContent(
+                        query = query,
+                        onQueryChange = { query = it },
+                        onSearch = { vm.pySearch(query) },
+                        items = pyItems,
+                        loading = pyLoading,
+                        loadingMore = pyLoadingMore,
+                        searchActive = pySearchActive,
+                        onClearSearch = { vm.pyClearSearch() },
+                        onLoadMore = { vm.pyLoadMore() },
+                        onItemClick = { track -> vm.onPyTrackClick(track) },
+                    )
+                    if (pyDetailLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+                    }
+                } else if (mode == MusicMode.FAVORITES) {
                     FavoritesContent(
                         favorites = favorites,
                         onPlayFavorite = { index ->
@@ -370,35 +433,31 @@ fun MusicPage(
             title = { Text(stringResource(R.string.music_source_switch)) },
             text = {
                 Column {
-                    scriptOptions.forEach { option ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scriptDialogOpen = false
-                                    vm.switchScript(option.id)
-                                }
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = if (option.selected) "● " else "○ ",
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            Text(
-                                text = option.label,
-                                style = MaterialTheme.typography.bodyLarge,
-                                modifier = Modifier.weight(1f),
-                            )
-                            if (option.user) {
-                                IconButton(onClick = { vm.deleteScript(option.id) }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_delete),
-                                        contentDescription = stringResource(R.string.music_source_delete),
-                                    )
-                                }
-                            }
-                        }
+                    scriptOptions.filter { !it.py }.forEach { option ->
+                        ScriptOptionRow(
+                            option = option,
+                            onSelect = {
+                                scriptDialogOpen = false
+                                vm.switchScript(option.id)
+                            },
+                            onDelete = { vm.deleteScript(option.id) },
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.music_py_section),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+                    )
+                    scriptOptions.filter { it.py }.forEach { option ->
+                        ScriptOptionRow(
+                            option = option,
+                            onSelect = {
+                                scriptDialogOpen = false
+                                vm.switchScript(option.id)
+                            },
+                            onDelete = { vm.deletePyScript(option.id) },
+                        )
                     }
                     TextButton(
                         onClick = {
@@ -419,6 +478,23 @@ fun MusicPage(
                     ) {
                         Text(stringResource(R.string.music_source_import))
                     }
+                    TextButton(
+                        onClick = {
+                            // .py spiders likewise come with inconsistent
+                            // mime types; accept python-ish types and */*.
+                            pyImportLauncher.launch(
+                                arrayOf(
+                                    "text/x-python",
+                                    "text/plain",
+                                    "application/octet-stream",
+                                    "*/*",
+                                ),
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.music_py_import))
+                    }
                 }
             },
             confirmButton = {},
@@ -435,6 +511,190 @@ fun MusicPage(
             onDismissRequest = { appearanceOpen = false },
             showEqSection = false,
         )
+    }
+
+    val picker = episodePicker
+    if (picker != null) {
+        AVBoxAlertDialog(
+            onDismissRequest = { vm.dismissEpisodePicker() },
+            title = { Text(picker.title) },
+            text = {
+                Column {
+                    Text(
+                        text = stringResource(R.string.music_py_choose_episode),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 420.dp),
+                    ) {
+                        itemsIndexed(
+                            picker.episodes,
+                            key = { index, _ -> index },
+                        ) { index, episode ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { vm.playEpisode(index) }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = episode.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { vm.dismissEpisodePicker() }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+}
+
+/** One selectable row in the source dialog (JS script or py spider). */
+@Composable
+private fun ScriptOptionRow(
+    option: MusicViewModel.ScriptOption,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (option.selected) "● " else "○ ",
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        Text(
+            text = option.label,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f),
+        )
+        if (option.user) {
+            IconButton(onClick = onDelete) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_delete),
+                    contentDescription = stringResource(R.string.music_source_delete),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Spider-mode content: the search field drives the spider's
+ * searchContent, the list below shows either the selected category feed
+ * or the search results, paged by scrolling like the native search list.
+ * Rows reuse [MusicTrackRow]: cover, name and remarks (singer) come from
+ * the vod fields the bridge mapped onto the track.
+ */
+@Composable
+private fun PySpiderContent(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    items: List<MusicTrack>,
+    loading: Boolean,
+    loadingMore: Boolean,
+    searchActive: Boolean,
+    onClearSearch: () -> Unit,
+    onLoadMore: () -> Unit,
+    onItemClick: (MusicTrack) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        MusicSearchField(
+            query = query,
+            onQueryChange = onQueryChange,
+            onSearch = onSearch,
+            modifier = Modifier.padding(top = 12.dp),
+        )
+        if (searchActive) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.music_tab_search),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onClearSearch) {
+                    Text(stringResource(R.string.music_py_back_category))
+                }
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+        ) {
+            when {
+                loading -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+
+                items.isNotEmpty() -> {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        itemsIndexed(
+                            items,
+                            key = { index, _ -> index },
+                        ) { index, track ->
+                            if (index >= items.size - 5) {
+                                LaunchedEffect(index) { onLoadMore() }
+                            }
+                            MusicTrackRow(
+                                track = track,
+                                onClick = { onItemClick(track) },
+                            )
+                        }
+                        if (loadingMore) {
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                else -> {
+                    Text(
+                        text = stringResource(R.string.music_empty_result),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+            }
+        }
     }
 }
 

@@ -547,3 +547,88 @@ lastResolvedQuality()（记录最近一次 getMusicUrl 实际命中的
   通常更明显。
 - 自定义滑杆只在 Equalizer 已建好（开始播放后）时出现；未播放
   时选自定义不显示滑杆，开始播放后重开 Sheet 即出现。
+
+## v1.13.0 py 音乐爬虫作为音源
+
+音乐页音源体系新增第三类源：base.spider 格式的 py 音乐爬虫，与 JS
+（LX）音源并列，复用视频侧同一套 pyramid/Chaquopy 运行时，不另起
+Python 引擎。
+
+### 接入方式
+
+- 音源对话框新增「py 音乐站点」分区：6 个内置爬虫（assets/
+  py_sources/，英文 slug 文件名，脚本头注释保留原文件名）+ 用户
+  导入项；下方新增「导入 py 音源」按钮。内置对照：
+  fy_musicbox=_____36_kjcj.py（音乐盒·丢丢喵）、kuwo_youyou=
+  ___37_akjv.py（小心儿悠悠·酷我）、netease_music=_______39_
+  h97s.py（网易云音乐）、netease_ddm1=_____40_c4ym.py、
+  netease_ddm2=______41_g2mw.py（网易云·丢丢喵两版）、
+  kugou_5sing=sing___42_b4va.py（5sing·丢丢喵）。同批的
+  _____38_np7v.py 是影视爬虫（枫叶影院），未放入音乐。
+- 存储照 LX 用户脚本模式（music/PyMusicSources.kt）：内置 asset
+  首次使用时释放到 filesDir/py_sources/（大小变化时重释放）；
+  用户导入复制到 filesDir/py_music_sources/，元数据 JSON 数组存
+  KV `py_music_sources`（读取带 "" 默认）。可切换、可删除；导入
+  校验失败 toast 原因，初始化（homeContent）失败不切换、停留在
+  上一个可用源并 toast 原因。选择持久化沿用 KV
+  `lx_music_script_id`，py 源存 "py:<slug>"，启动时自动恢复爬虫
+  模式，恢复失败回退 JS 默认源。
+- 爬虫模式（选中 py 源后）：第一行 chips = homeContent 的 class
+  分类（横滚），列表走 categoryContent 分页（滚动加载更多，追加
+  去重）；搜索框走 searchContent（带「返回分类」出口）；
+  [搜索|排行榜|我的收藏] 模式 chips 隐藏，原生模式的状态（平台、
+  榜单、搜索结果）不被爬虫模式污染，切回 JS 源完整恢复。列表行
+  复用现有行组件：vod_pic 封面、vod_name、vod_remarks 作歌手行。
+
+### 运行时复用点
+
+- music/PyMusicBridge.kt 构造最小 SourceBean（type=3，key=
+  "pymusic_<slug>"，ext=""，api="file://" + 爬虫文件绝对路径），
+  经 ApiConfig.get().getCSP(bean) 进入视频侧同一分发：
+  SpiderLoader 按 api 含 ".py" 分发到 pyLoader（pyramid
+  PythonLoader/PythonSpider），file:// 在 downloadPlugin 里直用
+  本地路径，无需完整站点配置、无下载。pyLoader 按 key 缓存实例，
+  重复调用复用已加载模块；视频配置切换 clear 后下次调用自动重建。
+- 调用线程模型与视频侧一致：Dispatchers.IO + BoundedCall 超时
+  包裹（首次 45s 含 Python 冷启动，其余 25s）+ SpiderReaper.track。
+- 结果按 TVBox 标准 JSON 解析：home/category/search 的 class/
+  list、detail 的 vod_play_from/vod_play_url、player 的
+  parse/jx/url/header。vod 映射为 MusicTrack（source="py:<slug>"，
+  songmid=vod_id，singer=vod_remarks）。
+
+### 播放
+
+- 点歌先走 detailContent：只有 1 个剧集直接播，队列=当前列表，
+  每首轮到时各自 detail+playerContent 懒解析；多剧集（专辑/歌单）
+  先弹选集层，队列=该 vod 的剧集列表。MusicTrack 新增 pyFlag/
+  pyEpId 两字段（JSON 往返兼容，收藏 key 带 pyEpId 区分同 vod
+  剧集）。
+- 播放复用 LxMusicPlayerActivity（队列/循环/收藏/下载/音效/沉浸
+  歌词不变）：py 歌曲经 PyMusicBridge.resolve 解析；playerContent
+  返回 parse=1/jx=1（或 video://）时不硬播，提示「该源需要解析，
+  暂不支持」；返回的 header 通过播放器共享的
+  DefaultHttpDataSource.Factory 默认请求属性带入播放，下载时
+  同样带 header（已解析 URL 优先复用）。
+- 歌词：py 歌曲不取平台歌词，歌词区留空，播放页与沉浸歌词均
+  显示既有「暂无歌词」。
+
+### Python 依赖核查
+
+- 6 个脚本的 import 只有 requests、bs4、Crypto 与标准库（39 号
+  另用 urllib3）。pyramid/build.gradle.kts 的 Chaquopy pip 清单
+  已含 requests、beautifulsoup4、pycryptodome；本次只新增显式
+  install("urllib3")（本为 requests 传递依赖，显式声明防丢失），
+  未删任何依赖。无清单外无法补的包。
+
+### 已知限制
+
+- py 源歌曲无歌词（爬虫不提供），不做平台歌词硬套。
+- parse 型（parse=1/jx=1）与 proxy:// 播放地址不支持，分别给出
+  提示/报错，不硬播。
+- py 运行时与视频侧共用：视频配置切换会清掉音乐爬虫实例缓存
+  （下次调用自动重建，首次会再付一次加载耗时）；pyLoader 的
+  recentPyKey 为全局单值，音乐与视频 py 站点的 proxy 调用互相
+  覆盖——音乐桥不使用 proxy 调用，不受影响。
+- 39 号脚本（netease_music）自带写死的外置缓存目录
+  /storage/emulated/0/Download/...，无存储权限时其缓存写入可能
+  失败，属脚本自身行为，本版未改脚本逻辑（仅加原名注释）。

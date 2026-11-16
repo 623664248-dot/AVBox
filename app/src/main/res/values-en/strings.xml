@@ -237,6 +237,14 @@
     <string name="music_source_import_failed">Source import failed: %1$s</string>
     <string name="music_source_delete">Delete source</string>
     <string name="music_source_deleted">Source deleted</string>
+    <string name="music_py_section">Py music sites</string>
+    <string name="music_py_import">Import py source</string>
+    <string name="music_py_parse_unsupported">This source needs parsing, which is not supported yet</string>
+    <string name="music_py_load_failed">Failed to load py source: %1$s</string>
+    <string name="music_py_import_failed">Failed to import py source: %1$s</string>
+    <string name="music_py_back_category">Back to categories</string>
+    <string name="music_py_choose_episode">Choose episode</string>
+    <string name="music_py_source_missing">Py source not found</string>
     <string name="music_tab_search">Search</string>
     <string name="music_tab_charts">Charts</string>
     <string name="music_charts_empty">No charts available</string>

@@ -110,6 +110,14 @@
     <string name="music_source_import_failed">音源導入失敗：%1$s</string>
     <string name="music_source_delete">刪除音源</string>
     <string name="music_source_deleted">音源已刪除</string>
+    <string name="music_py_section">py 音樂站點</string>
+    <string name="music_py_import">導入 py 音源</string>
+    <string name="music_py_parse_unsupported">該源需要解析，暫不支援</string>
+    <string name="music_py_load_failed">py 音源載入失敗：%1$s</string>
+    <string name="music_py_import_failed">py 音源導入失敗：%1$s</string>
+    <string name="music_py_back_category">返回分類</string>
+    <string name="music_py_choose_episode">選擇劇集</string>
+    <string name="music_py_source_missing">py 音源不存在</string>
     <string name="music_tab_search">搜尋</string>
     <string name="music_tab_charts">排行榜</string>
     <string name="music_charts_empty">暫無榜單</string>

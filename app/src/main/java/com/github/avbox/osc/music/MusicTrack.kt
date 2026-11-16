@@ -34,7 +34,21 @@ data class MusicTrack(
     val strMediaMid: String = "",
     /** Per-quality hashes (kg only): quality type -> hash. */
     val typeHashes: Map<String, String> = emptyMap(),
+    /**
+     * Py-spider playback coordinates (only for tracks whose [source] is
+     * "py:<sourceId>"): the vod_play_from flag and the episode id inside
+     * vod_play_url that playerContent expects. Empty for plain list rows:
+     * those resolve lazily through detailContent at play time, and always
+     * empty for platform (LX) tracks.
+     */
+    val pyFlag: String = "",
+    val pyEpId: String = "",
 ) {
+    /** True when this track belongs to a py music spider source. */
+    val isPy: Boolean get() = source.startsWith(PY_SOURCE_PREFIX)
+
+    /** The py source id (slug) without the "py:" prefix; "" for LX tracks. */
+    val pySourceId: String get() = source.removePrefix(PY_SOURCE_PREFIX)
     val intervalText: String
         get() {
             if (durationSec <= 0) return ""
@@ -91,10 +105,15 @@ data class MusicTrack(
         val types = JSONObject()
         for ((type, h) in typeHashes) types.put(type, h)
         obj.put("typeHashes", types)
+        obj.put("pyFlag", pyFlag)
+        obj.put("pyEpId", pyEpId)
         return obj
     }
 
     companion object {
+        /** Source value prefix marking a track as belonging to a py spider. */
+        const val PY_SOURCE_PREFIX = "py:"
+
         fun fromJson(obj: JSONObject): MusicTrack {
             val types = LinkedHashMap<String, String>()
             val typeObj = obj.optJSONObject("typeHashes")
@@ -118,6 +137,8 @@ data class MusicTrack(
                 albumMid = obj.optString("albumMid"),
                 strMediaMid = obj.optString("strMediaMid"),
                 typeHashes = types,
+                pyFlag = obj.optString("pyFlag"),
+                pyEpId = obj.optString("pyEpId"),
             )
         }
 

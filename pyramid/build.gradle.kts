@@ -53,6 +53,11 @@ chaquopy {
             install("ujson")
             install("pyquery==2.0.2")
             install("requests")
+            // Direct dependency of some bundled music spiders
+            // (from urllib3.util.retry import Retry); requests pulls it
+            // in transitively, but keep it explicit so it cannot vanish
+            // if requests ever vendors its transport again.
+            install("urllib3")
             install(file("wheels/jsonpath-0.54-py3-none-any.whl").absolutePath)
             install("cachetools")
             install("pycryptodome")

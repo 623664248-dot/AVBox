@@ -45,13 +45,16 @@ object LxFavorites {
 
     /**
      * Identity of a song across sessions: platform + songmid (the LX id).
-     * Falls back to name/singer for the rare track without an id.
+     * Falls back to name/singer for the rare track without an id. Py
+     * episode tracks share the vod's songmid, so the episode id joins the
+     * key to keep episodes of one album/playlist distinct.
      */
     private fun keyOf(track: MusicTrack): String {
-        return if (track.songmid.isNotEmpty()) {
+        val base = if (track.songmid.isNotEmpty()) {
             track.source + "|" + track.songmid
         } else {
             track.source + "|" + track.name + "|" + track.singer
         }
+        return if (track.pyEpId.isNotEmpty()) base + "|" + track.pyEpId else base
     }
 }

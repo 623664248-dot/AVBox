@@ -20,7 +20,9 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
@@ -30,6 +32,8 @@ import com.github.avbox.osc.music.LxBridge
 import com.github.avbox.osc.music.LxFavorites
 import com.github.avbox.osc.music.MusicApi
 import com.github.avbox.osc.music.MusicTrack
+import com.github.avbox.osc.music.PyMusicBridge
+import com.github.avbox.osc.music.PyMusicSources
 import com.github.avbox.osc.net.HttpClients
 import com.github.avbox.osc.ui.base.BaseActivity
 import com.github.avbox.osc.ui.components.SheetHostScaffold
@@ -161,8 +165,23 @@ class LxMusicPlayerActivity : BaseActivity() {
         playAt(state.index)
     }
 
+    /**
+     * Shared HTTP data source factory: py spiders may answer
+     * playerContent with required headers (Referer/User-Agent), which
+     * are applied per track through the factory's default request
+     * properties before each setMediaItem. This is the same factory
+     * ExoPlayer would build internally, so LX tracks are unaffected.
+     */
+    private val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+        .setAllowCrossProtocolRedirects(true)
+
+    /** Headers of the currently resolved py track; empty for LX tracks. */
+    private var currentHeaders: Map<String, String> = emptyMap()
+
     private fun buildPlayer() {
-        val exo = ExoPlayer.Builder(this).build()
+        val exo = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(httpDataSourceFactory))
+            .build()
         exo.setAudioAttributes(
             AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -218,16 +237,41 @@ class LxMusicPlayerActivity : BaseActivity() {
         resolveJob?.cancel()
         resolveJob = lifecycleScope.launch {
             try {
-                val url = LxBridge.getMusicUrl(track)
-                val exo = player ?: return@launch
-                if (state.index == index) {
-                    state.currentUrl = url
-                    state.qualityText = LxBridge.lastResolvedQuality()?.uppercase() ?: ""
+                val url: String
+                if (track.isPy) {
+                    // Py spider track: resolve through the shared spider
+                    // runtime (detail+playerContent, lazily per track) and
+                    // carry the spider's headers into the HTTP factory.
+                    val resolved = PyMusicBridge.resolve(
+                        this@LxMusicPlayerActivity,
+                        pyDefFor(track),
+                        track,
+                    )
+                    url = resolved.url
+                    currentHeaders = resolved.headers
+                    if (state.index == index) {
+                        state.currentUrl = url
+                        state.qualityText = ""
+                    }
+                } else {
+                    currentHeaders = emptyMap()
+                    url = LxBridge.getMusicUrl(track)
+                    if (state.index == index) {
+                        state.currentUrl = url
+                        state.qualityText = LxBridge.lastResolvedQuality()?.uppercase() ?: ""
+                    }
                 }
+                val exo = player ?: return@launch
+                httpDataSourceFactory.setDefaultRequestProperties(currentHeaders)
                 exo.setMediaItem(MediaItem.fromUri(url))
                 exo.prepare()
                 ensureEffects()
                 exo.play()
+            } catch (e: PyMusicBridge.PyParseRequiredException) {
+                state.buffering = false
+                val message = getString(R.string.music_py_parse_unsupported)
+                state.errorText = message
+                Toast.makeText(this@LxMusicPlayerActivity, message, Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 state.buffering = false
                 val message = e.message ?: getString(R.string.music_resolve_failed)
@@ -236,13 +280,24 @@ class LxMusicPlayerActivity : BaseActivity() {
             }
         }
         lyricJob?.cancel()
-        lyricJob = lifecycleScope.launch {
-            val raw = MusicApi.lyric(track)
-            if (state.index != index) return@launch
-            if (!raw.isNullOrBlank()) {
-                state.lyricLines = MusicLrc.parse(raw)
+        // Py spiders provide no lyrics: leave the lyric area empty (the
+        // screen shows its no-lyrics text) instead of force-matching a
+        // platform lyric onto a spider song.
+        if (!track.isPy) {
+            lyricJob = lifecycleScope.launch {
+                val raw = MusicApi.lyric(track)
+                if (state.index != index) return@launch
+                if (!raw.isNullOrBlank()) {
+                    state.lyricLines = MusicLrc.parse(raw)
+                }
             }
         }
+    }
+
+    /** The registered py source definition a py track belongs to. */
+    private fun pyDefFor(track: MusicTrack): PyMusicSources.PyDef {
+        return PyMusicSources.findDef(this, track.pySourceId)
+            ?: throw IllegalStateException(getString(R.string.music_py_source_missing))
     }
 
     private fun togglePlay() {
@@ -403,9 +458,32 @@ class LxMusicPlayerActivity : BaseActivity() {
         downloadJob?.cancel()
         downloadJob = lifecycleScope.launch {
             try {
-                val url = state.currentUrl ?: LxBridge.getMusicUrl(track)
+                val cachedUrl = state.currentUrl
+                val url: String
+                val headers: Map<String, String>
+                when {
+                    track.isPy && cachedUrl != null -> {
+                        url = cachedUrl
+                        headers = currentHeaders
+                    }
+
+                    track.isPy -> {
+                        val resolved = PyMusicBridge.resolve(
+                            this@LxMusicPlayerActivity,
+                            pyDefFor(track),
+                            track,
+                        )
+                        url = resolved.url
+                        headers = resolved.headers
+                    }
+
+                    else -> {
+                        url = cachedUrl ?: LxBridge.getMusicUrl(track)
+                        headers = emptyMap()
+                    }
+                }
                 val savedTo = withContext(Dispatchers.IO) {
-                    downloadToLibrary(track, url) { percent ->
+                    downloadToLibrary(track, url, headers) { percent ->
                         state.downloadPercent = percent
                     }
                 }
@@ -417,6 +495,16 @@ class LxMusicPlayerActivity : BaseActivity() {
                     this@LxMusicPlayerActivity,
                     getString(R.string.music_download_done_toast, savedTo),
                     Toast.LENGTH_LONG,
+                ).show()
+            } catch (e: PyMusicBridge.PyParseRequiredException) {
+                if (state.current == track) {
+                    state.downloadStatus = LxDownloadStatus.IDLE
+                    state.downloadPercent = -1
+                }
+                Toast.makeText(
+                    this@LxMusicPlayerActivity,
+                    getString(R.string.music_py_parse_unsupported),
+                    Toast.LENGTH_SHORT,
                 ).show()
             } catch (e: Exception) {
                 if (state.current == track) {
@@ -441,12 +529,17 @@ class LxMusicPlayerActivity : BaseActivity() {
     private fun downloadToLibrary(
         track: MusicTrack,
         url: String,
+        headers: Map<String, String> = emptyMap(),
         onProgress: (Int) -> Unit,
     ): String {
         val extension = extensionOf(url)
         val fileName = cleanFileName(track, extension)
         val client = HttpClients.defaultClient ?: OkHttpClient()
-        val request = Request.Builder().url(url).build()
+        val requestBuilder = Request.Builder().url(url)
+        for ((key, value) in headers) {
+            requestBuilder.header(key, value)
+        }
+        val request = requestBuilder.build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 throw IllegalStateException("HTTP " + response.code)
