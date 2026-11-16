@@ -83,6 +83,14 @@ data class GlassTabItem(
     val label: String
 )
 
+/** A non-tab bar entry pinned to a fixed slot: rendered like a tab but
+ *  never selected; clicking runs [onClick] instead of switching pages. */
+data class NavActionItem(
+    val slot: Int,
+    val item: GlassTabItem,
+    val onClick: () -> Unit,
+)
+
 private val LocalNavTabScale = staticCompositionLocalOf { { 1f } }
 
 private fun Modifier.crossAxisSize(axis: NavAxis, length: Dp): Modifier =
@@ -134,12 +142,11 @@ fun FloatingNavBar(
     tabs: List<GlassTabItem>,
     config: LiquidGlassConfig,
     interactive: () -> Boolean = { true },
-    actionItem: GlassTabItem? = null,
-    onActionClick: () -> Unit = {},
+    actionItems: List<NavActionItem> = emptyList(),
 ) {
     val tabsCount = tabs.size
-    val actionSlot = actionItem?.let { NavMetrics.actionSlotFor(tabsCount) }
-    val slotCount = tabsCount + if (actionItem != null) 1 else 0
+    val actionSlots = remember(actionItems) { actionItems.map { it.slot }.toSet() }
+    val slotCount = tabsCount + actionItems.size
     val isLightTheme = !isSystemInDarkTheme()
     val isBlurEnabled = config.navbarEnabled
     val isHorizontal = axis == NavAxis.Horizontal
@@ -193,11 +200,11 @@ fun FloatingNavBar(
         val dampedDragAnimationHolder = remember { DampedDragAnimationHolder() }
 
         val dampedDragAnimation = remember(
-            animationScope, tabsCount, slotCount, density, slotStridePx, isHorizontal, isLtr
+            animationScope, tabsCount, slotCount, actionSlots, density, slotStridePx, isHorizontal, isLtr
         ) {
             DampedDragAnimation(
                 animationScope = animationScope,
-                initialValue = NavMetrics.slotIndexOfTab(selectedTabIndex(), actionSlot).toFloat(),
+                initialValue = NavMetrics.slotIndexOfTab(selectedTabIndex(), actionSlots).toFloat(),
                 valueRange = 0f..maxOf(slotCount - 1, 0).toFloat(),
                 visibilityThreshold = 0.001f,
                 initialScale = 1f,
@@ -218,9 +225,9 @@ fun FloatingNavBar(
                 onDragStarted = {},
                 onDragStopped = {
                     val slot = targetValue.fastRoundToInt().fastCoerceIn(0, slotCount - 1)
-                    val page = NavMetrics.tabIndexOfSlot(slot, actionSlot)
+                    val page = NavMetrics.tabIndexOfSlot(slot, actionSlots)
                     currentIndex = page
-                    animateToValue(NavMetrics.slotIndexOfTab(page, actionSlot).toFloat())
+                    animateToValue(NavMetrics.slotIndexOfTab(page, actionSlots).toFloat())
                     if (page != selectedTabIndex()) {
                         currentOnTabSelected(page)
                     } else {
@@ -251,7 +258,7 @@ fun FloatingNavBar(
             snapshotFlow { selectedTabIndex() }.collectLatest { index ->
                 currentIndex = index
                 dampedDragAnimation.animateToValue(
-                    NavMetrics.slotIndexOfTab(index, actionSlot).toFloat()
+                    NavMetrics.slotIndexOfTab(index, actionSlots).toFloat()
                 )
             }
         }
@@ -337,22 +344,20 @@ fun FloatingNavBar(
             horizontalContent = {
                 NavSlotsRow(
                     tabs = tabs,
-                    actionItem = actionItem,
-                    actionSlot = actionSlot,
+                    actionItems = actionItems,
+                    actionSlots = actionSlots,
                     selectedTabIndex = selectedTabIndex,
                     onTabSelected = onTabSelected,
-                    onActionClick = onActionClick,
                     interactive = interactive,
                 )
             },
             verticalContent = {
                 NavSlotsColumn(
                     tabs = tabs,
-                    actionItem = actionItem,
-                    actionSlot = actionSlot,
+                    actionItems = actionItems,
+                    actionSlots = actionSlots,
                     selectedTabIndex = selectedTabIndex,
                     onTabSelected = onTabSelected,
-                    onActionClick = onActionClick,
                     interactive = interactive,
                 )
             },
@@ -406,22 +411,20 @@ fun FloatingNavBar(
                 horizontalContent = {
                     NavSlotsRow(
                         tabs = tabs,
-                        actionItem = actionItem,
-                        actionSlot = actionSlot,
+                        actionItems = actionItems,
+                        actionSlots = actionSlots,
                         selectedTabIndex = selectedTabIndex,
                         onTabSelected = onTabSelected,
-                        onActionClick = onActionClick,
                         interactive = interactive,
                     )
                 },
                 verticalContent = {
                     NavSlotsColumn(
                         tabs = tabs,
-                        actionItem = actionItem,
-                        actionSlot = actionSlot,
+                        actionItems = actionItems,
+                        actionSlots = actionSlots,
                         selectedTabIndex = selectedTabIndex,
                         onTabSelected = onTabSelected,
-                        onActionClick = onActionClick,
                         interactive = interactive,
                     )
                 },
@@ -506,27 +509,27 @@ fun FloatingNavBar(
 @Composable
 private fun RowScope.NavSlotsRow(
     tabs: List<GlassTabItem>,
-    actionItem: GlassTabItem?,
-    actionSlot: Int?,
+    actionItems: List<NavActionItem>,
+    actionSlots: Set<Int>,
     selectedTabIndex: () -> Int,
     onTabSelected: (Int) -> Unit,
-    onActionClick: () -> Unit,
     interactive: () -> Boolean,
 ) {
     val currentIndex = selectedTabIndex()
     val enabled = interactive()
-    repeat(tabs.size + if (actionItem != null) 1 else 0) { slot ->
-        if (actionItem != null && slot == actionSlot) {
+    repeat(tabs.size + actionItems.size) { slot ->
+        val action = actionItems.firstOrNull { it.slot == slot }
+        if (action != null) {
             NavTabItem(
-                tab = actionItem,
+                tab = action.item,
                 selected = false,
                 enabled = enabled,
-                onClick = onActionClick,
+                onClick = action.onClick,
                 role = Role.Button,
                 modifier = Modifier.fillMaxHeight().weight(1f),
             )
         } else {
-            val index = NavMetrics.tabIndexOfSlot(slot, actionSlot)
+            val index = NavMetrics.tabIndexOfSlot(slot, actionSlots)
             NavTabItem(
                 tab = tabs[index],
                 selected = index == currentIndex,
@@ -541,27 +544,27 @@ private fun RowScope.NavSlotsRow(
 @Composable
 private fun ColumnScope.NavSlotsColumn(
     tabs: List<GlassTabItem>,
-    actionItem: GlassTabItem?,
-    actionSlot: Int?,
+    actionItems: List<NavActionItem>,
+    actionSlots: Set<Int>,
     selectedTabIndex: () -> Int,
     onTabSelected: (Int) -> Unit,
-    onActionClick: () -> Unit,
     interactive: () -> Boolean,
 ) {
     val currentIndex = selectedTabIndex()
     val enabled = interactive()
-    repeat(tabs.size + if (actionItem != null) 1 else 0) { slot ->
-        if (actionItem != null && slot == actionSlot) {
+    repeat(tabs.size + actionItems.size) { slot ->
+        val action = actionItems.firstOrNull { it.slot == slot }
+        if (action != null) {
             NavTabItem(
-                tab = actionItem,
+                tab = action.item,
                 selected = false,
                 enabled = enabled,
-                onClick = onActionClick,
+                onClick = action.onClick,
                 role = Role.Button,
                 modifier = Modifier.fillMaxWidth().height(NavMetrics.SLOT_MAIN_DP.dp),
             )
         } else {
-            val index = NavMetrics.tabIndexOfSlot(slot, actionSlot)
+            val index = NavMetrics.tabIndexOfSlot(slot, actionSlots)
             NavTabItem(
                 tab = tabs[index],
                 selected = index == currentIndex,

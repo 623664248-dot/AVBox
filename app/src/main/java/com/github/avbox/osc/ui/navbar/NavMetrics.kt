@@ -22,11 +22,18 @@ object NavMetrics {
 
     fun actionSlotFor(tabCount: Int): Int = tabCount / 2
 
-    fun slotIndexOfTab(tab: Int, actionSlot: Int?): Int =
-        if (actionSlot != null && tab >= actionSlot) tab + 1 else tab
+    fun slotIndexOfTab(tab: Int, actionSlots: Set<Int>): Int {
+        if (tab < 0) return tab
+        var slot = tab
+        while (true) {
+            val shifted = tab + actionSlots.count { it <= slot }
+            if (shifted == slot) return slot
+            slot = shifted
+        }
+    }
 
-    fun tabIndexOfSlot(slot: Int, actionSlot: Int?): Int =
-        if (actionSlot != null && slot > actionSlot) slot - 1 else slot
+    fun tabIndexOfSlot(slot: Int, actionSlots: Set<Int>): Int =
+        slot - actionSlots.count { it < slot }
 
     fun reserveDp(glassEnabled: Boolean, axis: NavAxis): Int = when {
         axis == NavAxis.Vertical -> if (glassEnabled) FLOATING_OVERLAY_DP else SURFACE_RAIL_WIDTH_DP

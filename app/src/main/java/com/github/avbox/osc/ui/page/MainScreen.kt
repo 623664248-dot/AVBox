@@ -65,6 +65,7 @@ import androidx.lifecycle.compose.rememberLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.github.avbox.osc.R
 import com.github.avbox.osc.server.ControlManager
+import com.github.avbox.osc.ui.HtmlWebActivity
 import com.github.avbox.osc.ui.LivePlayActivity
 import com.github.avbox.osc.ui.components.AVBoxAlertDialog
 import com.github.avbox.osc.ui.components.LocalTopBarGlassPauseRecording
@@ -75,6 +76,7 @@ import com.github.avbox.osc.ui.components.SheetHostState
 import com.github.avbox.osc.ui.currentWindowWidthClass
 import com.github.avbox.osc.ui.navbar.FloatingNavBar
 import com.github.avbox.osc.ui.navbar.GlassTabItem
+import com.github.avbox.osc.ui.navbar.NavActionItem
 import com.github.avbox.osc.ui.navbar.NavAxis
 import com.github.avbox.osc.ui.navbar.NavMetrics
 import com.github.avbox.osc.ui.settings.UiSettingsState
@@ -91,6 +93,14 @@ private enum class AppTab(@StringRes val labelRes: Int, @DrawableRes val icon: I
     FOLLOWING(R.string.tab_following, R.drawable.ic_tab_following),
     SETTINGS(R.string.tab_mine, R.drawable.ic_tab_mine),
 }
+
+// Bottom-nav slot layout, shared by the surface bars and the glass bar:
+// 0 首页 · 1 网页 (action) · 2 直播 (action, unless hidden) · 3 追剧 · 4 我的.
+// The web action sits in the slot the records tab used to occupy; records
+// itself left the bar for the home top bar and still opens the same pager
+// page (AppTab.RECORDS), so its destination and navigation are unchanged.
+private const val NAV_WEB_ACTION_SLOT = 1
+private const val NAV_LIVE_ACTION_SLOT = 2
 
 @Composable
 fun MainScreen() {
@@ -184,6 +194,17 @@ private fun MainContent() {
             }
         }
     }
+    // Tabs actually rendered in the nav bars. RECORDS is not among them:
+    // its bar slot now hosts the web action item, and the records page is
+    // reached from the home top bar instead (still selectTab(RECORDS)).
+    val navTabs = remember { listOf(AppTab.HOME, AppTab.FOLLOWING, AppTab.SETTINGS) }
+    val navActionSlots: Set<Int> =
+        if (navLiveHidden) setOf(NAV_WEB_ACTION_SLOT)
+        else setOf(NAV_WEB_ACTION_SLOT, NAV_LIVE_ACTION_SLOT)
+    val navSlotCount = navTabs.size + navActionSlots.size
+    val openWeb: () -> Unit = remember(context) {
+        { HtmlWebActivity.start(context) }
+    }
     val liquidGlassConfig = LiquidGlassState.config
     val liquidGlassEnabled = liquidGlassConfig.navbarEnabled &&
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -231,14 +252,22 @@ private fun MainContent() {
 
         else -> PaddingValues(0.dp)
     }
-    val tabLabels = AppTab.entries.map { stringResource(it.labelRes) }
-    val glassTabs = remember(tabLabels) {
-        AppTab.entries.mapIndexed { index, tab -> GlassTabItem(tab.icon, tabLabels[index]) }
+    val navTabLabels = navTabs.map { stringResource(it.labelRes) }
+    val glassTabs = remember(navTabLabels) {
+        navTabs.mapIndexed { index, tab -> GlassTabItem(tab.icon, navTabLabels[index]) }
     }
     val liveActionLabel = stringResource(R.string.common_live)
     val liveActionItem = remember(liveActionLabel) { GlassTabItem(R.drawable.ic_live_fab, liveActionLabel) }
     val openLive: () -> Unit = remember(context) {
         { context.startActivity(Intent(context, LivePlayActivity::class.java)) }
+    }
+    val webActionLabel = stringResource(R.string.html_web_entry)
+    val webActionItem = remember(webActionLabel) { GlassTabItem(R.drawable.ic_tab_web, webActionLabel) }
+    val navActionItems = remember(webActionItem, liveActionItem, navLiveHidden, openWeb, openLive) {
+        buildList {
+            add(NavActionItem(NAV_WEB_ACTION_SLOT, webActionItem, openWeb))
+            if (!navLiveHidden) add(NavActionItem(NAV_LIVE_ACTION_SLOT, liveActionItem, openLive))
+        }
     }
     CompositionLocalProvider(
         LocalSheetHost provides sheetHost,
@@ -253,36 +282,55 @@ private fun MainContent() {
                         ShortNavigationBar(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         ) {
-                            AppTab.entries.forEachIndexed { index, tab ->
-                                if (!navLiveHidden && index == NavMetrics.actionSlotFor(AppTab.entries.size)) {
-                                    ShortNavigationBarItem(
+                            for (slot in 0 until navSlotCount) {
+                                when {
+                                    slot == NAV_WEB_ACTION_SLOT -> ShortNavigationBarItem(
                                         selected = false,
-                                        onClick = openLive,
+                                        onClick = openWeb,
                                         icon = {
                                             Icon(
-                                                painterResource(liveActionItem.iconRes),
-                                                contentDescription = null,
+                                                painterResource(webActionItem.iconRes),
+                                                contentDescription = webActionItem.label,
                                             )
                                         },
                                         label = null,
                                     )
-                                }
-                                val selected = pagerState.targetPage == index
-                                ShortNavigationBarItem(
-                                    selected = selected,
-                                    onClick = { selectTab(index) },
-                                    icon = {
-                                        Icon(
-                                            painterResource(tab.icon),
-                                            contentDescription = stringResource(tab.labelRes),
+
+                                    slot == NAV_LIVE_ACTION_SLOT && !navLiveHidden ->
+                                        ShortNavigationBarItem(
+                                            selected = false,
+                                            onClick = openLive,
+                                            icon = {
+                                                Icon(
+                                                    painterResource(liveActionItem.iconRes),
+                                                    contentDescription = null,
+                                                )
+                                            },
+                                            label = null,
                                         )
-                                    },
-                                    label = if (selected) {
-                                        { Text(stringResource(tab.labelRes)) }
-                                    } else {
-                                        null
-                                    },
-                                )
+
+                                    else -> {
+                                        val tab = navTabs[
+                                            NavMetrics.tabIndexOfSlot(slot, navActionSlots)
+                                        ]
+                                        val selected = pagerState.targetPage == tab.ordinal
+                                        ShortNavigationBarItem(
+                                            selected = selected,
+                                            onClick = { selectTab(tab.ordinal) },
+                                            icon = {
+                                                Icon(
+                                                    painterResource(tab.icon),
+                                                    contentDescription = stringResource(tab.labelRes),
+                                                )
+                                            },
+                                            label = if (selected) {
+                                                { Text(stringResource(tab.labelRes)) }
+                                            } else {
+                                                null
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -316,7 +364,11 @@ private fun MainContent() {
                         )
                         CompositionLocalProvider(LocalLifecycleOwner provides pageLifecycleOwner) {
                             when (AppTab.entries[page]) {
-                                AppTab.HOME -> HomePage(homeViewModel, pageContentPadding)
+                                AppTab.HOME -> HomePage(
+                                    homeViewModel,
+                                    pageContentPadding,
+                                    onOpenRecords = { selectTab(AppTab.RECORDS.ordinal) },
+                                )
                                 AppTab.RECORDS -> RecordsPage(contentPadding = pageContentPadding)
                                 AppTab.FOLLOWING -> FollowingPage(contentPadding = pageContentPadding)
                                 AppTab.SETTINGS -> SettingsPage(contentPadding = pageContentPadding)
@@ -355,13 +407,19 @@ private fun MainContent() {
                     FloatingNavBar(
                         backdrop = liquidBackdrop,
                         axis = navAxis,
-                        selectedTabIndex = { pagerState.targetPage },
-                        onTabSelected = selectTab,
+                        // Bar-tab index of the current pager page; -1 while
+                        // the records page (no longer a bar tab) is showing,
+                        // so no bar item renders selected.
+                        selectedTabIndex = {
+                            navTabs.indexOfFirst { it.ordinal == pagerState.targetPage }
+                        },
+                        onTabSelected = { barIndex ->
+                            navTabs.getOrNull(barIndex)?.let { selectTab(it.ordinal) }
+                        },
                         tabs = glassTabs,
                         config = liquidGlassConfig,
                         interactive = { true },
-                        actionItem = if (navLiveHidden) null else liveActionItem,
-                        onActionClick = openLive,
+                        actionItems = navActionItems,
                     )
                 }
             }
@@ -373,9 +431,21 @@ private fun MainContent() {
                         .windowInsetsPadding(WindowInsets.systemBars),
                     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                 ) {
-                    AppTab.entries.forEachIndexed { index, tab ->
-                        if (!navLiveHidden && index == NavMetrics.actionSlotFor(AppTab.entries.size)) {
-                            NavigationRailItem(
+                    for (slot in 0 until navSlotCount) {
+                        when {
+                            slot == NAV_WEB_ACTION_SLOT -> NavigationRailItem(
+                                selected = false,
+                                onClick = openWeb,
+                                icon = {
+                                    Icon(
+                                        painterResource(webActionItem.iconRes),
+                                        contentDescription = webActionItem.label,
+                                    )
+                                },
+                                label = { Text(webActionItem.label) },
+                            )
+
+                            slot == NAV_LIVE_ACTION_SLOT && !navLiveHidden -> NavigationRailItem(
                                 selected = false,
                                 onClick = openLive,
                                 icon = {
@@ -386,18 +456,24 @@ private fun MainContent() {
                                 },
                                 label = { Text(liveActionItem.label) },
                             )
-                        }
-                        NavigationRailItem(
-                            selected = pagerState.currentPage == index,
-                            onClick = { selectTab(index) },
-                            icon = {
-                                Icon(
-                                    painterResource(tab.icon),
-                                    contentDescription = stringResource(tab.labelRes),
+
+                            else -> {
+                                val tab = navTabs[
+                                    NavMetrics.tabIndexOfSlot(slot, navActionSlots)
+                                ]
+                                NavigationRailItem(
+                                    selected = pagerState.currentPage == tab.ordinal,
+                                    onClick = { selectTab(tab.ordinal) },
+                                    icon = {
+                                        Icon(
+                                            painterResource(tab.icon),
+                                            contentDescription = stringResource(tab.labelRes),
+                                        )
+                                    },
+                                    label = { Text(stringResource(tab.labelRes)) },
                                 )
-                            },
-                            label = { Text(stringResource(tab.labelRes)) },
-                        )
+                            }
+                        }
                     }
                 }
             }

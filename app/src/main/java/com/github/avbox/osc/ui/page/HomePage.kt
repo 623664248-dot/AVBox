@@ -34,7 +34,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.Icon
@@ -77,7 +76,6 @@ import com.github.avbox.osc.R
 import com.github.avbox.osc.bean.Movie
 import com.github.avbox.osc.net.SiteSearch
 import com.github.avbox.osc.ui.ConfigManageActivity
-import com.github.avbox.osc.ui.HtmlWebActivity
 import com.github.avbox.osc.ui.SearchActivity
 import com.github.avbox.osc.ui.components.AVBoxBottomSheet
 import com.github.avbox.osc.ui.components.AVBoxOptionMenuAction
@@ -112,6 +110,10 @@ private val HomeTopBarControlSpacing = 8.dp
 fun HomePage(
     vm: HomeViewModel,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    // Records left the bottom nav (its slot now opens the web page); this
+    // is its new entry point in the top bar. MainScreen wires it to the
+    // same pager navigation the records tab used.
+    onOpenRecords: () -> Unit = {},
 ) {
     val navStart = contentPadding.calculateStartPadding(LocalLayoutDirection.current)
     val navBottom = contentPadding.calculateBottomPadding()
@@ -268,12 +270,12 @@ fun HomePage(
                 Box(
                     modifier = Modifier
                         .size(40.dp)
-                        .clickable { HtmlWebActivity.start(context) },
+                        .clickable { onOpenRecords() },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Language,
-                        contentDescription = stringResource(R.string.html_web_entry),
+                        painter = painterResource(R.drawable.ic_tab_records),
+                        contentDescription = stringResource(R.string.tab_records),
                         tint = MaterialTheme.colorScheme.onSurface,
                     )
                 }
