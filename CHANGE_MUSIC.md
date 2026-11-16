@@ -314,3 +314,23 @@ lyricLines 数据与 MusicLrc 解析，不新造管线。沉浸模式保留最�
   读取带 "" 默认值（避开无默认值读未注册 key 恒 null 的坑）；
   页面切走切回、杀 App 重开都恢复上次位置，恢复时同样 clamp。
 - 弹窗、MusicViewModel、LxBridge、播放器、MusicApi 均未动。
+
+## v1.9.2 播放器回退
+
+- 现象：v1.9.0 把 LxMusicPlayerActivity 改成 MediaController +
+  LxPlaybackService（MediaSessionService）后，真机出现「点歌曲立
+  刻闪退」——内置星海音源 + 酷狗榜单歌曲可复现，播放页都来不及
+  显示。Kotlin 层逐行查过没找到必崩点，疑在 media3 会话服务 /
+  默认通知一侧。
+- 处理：先回退恢复播放。LxMusicPlayerActivity 整体恢复为
+  v1.8.1 的 Activity 内 ExoPlayer 实现（该写法 v1.7.1 起真机验
+  证能播）；它与当前 LxMusicPlayerScreen 的回调签名逐个对齐，
+  v1.9.0 的点封面沉浸歌词保留可用。
+- AndroidManifest 删除 .music.LxPlaybackService 的 <service>
+  注册块；LxPlaybackService.kt 文件保留（未注册即 inert，类注
+  释已标明停用），gradle 的 media3-session 依赖保留不动。
+- 后台播放暂时没有（退出播放页即停，与 v1.8.1 行为一致），后
+  续单独重做服务化时再恢复。
+- v1.9.0 / v1.9.1 的其余成果保留不动：KV 两处 "" 默认值修复
+  （音源导入名单与选择持久化）、awaitInited 超时 30s、沉浸歌
+  词、悬浮音源按钮。

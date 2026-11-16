@@ -8,6 +8,9 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 
 /**
+ * v1.9.2 起未注册、暂未启用（服务化回退）——本文件保留但 AndroidManifest
+ * 已删除注册，运行不到；后台播放后续单独重做时再启用。
+ *
  * Background playback service for the LX music player: it owns the
  * ExoPlayer so playback continues when the player Activity is backgrounded
  * or destroyed, and exposes it through a [MediaSession]. The session
