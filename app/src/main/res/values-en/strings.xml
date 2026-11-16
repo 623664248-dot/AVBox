@@ -246,6 +246,12 @@
     <string name="music_py_choose_episode">Choose episode</string>
     <string name="music_py_source_missing">Py source not found</string>
     <string name="music_py_fallback">Py source</string>
+    <string name="music_sleep_timer">Sleep timer</string>
+    <string name="music_sleep_off">Off</string>
+    <string name="music_sleep_minutes">%1$d min</string>
+    <string name="music_sleep_remaining">%1$d min left</string>
+    <string name="music_sleep_fired">Sleep timer ended, playback paused</string>
+    <string name="music_mini_close">Close playback</string>
     <string name="music_tab_search">Search</string>
     <string name="music_tab_charts">Charts</string>
     <string name="music_charts_empty">No charts available</string>

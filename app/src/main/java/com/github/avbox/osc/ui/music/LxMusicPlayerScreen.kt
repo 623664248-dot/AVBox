@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import coil3.compose.AsyncImage
 import com.github.avbox.osc.R
+import com.github.avbox.osc.ui.components.AVBoxOptionSheet
 
 /** Background when no cover colour has been sampled yet: deep blue-grey. */
 private val FallbackBgColor = Color(0xFF262833)
@@ -80,10 +81,12 @@ fun LxMusicPlayerScreen(
     onToggleLoopMode: () -> Unit = {},
     onToggleFavorite: () -> Unit = {},
     onDownload: () -> Unit = {},
+    onSleepTimerSelected: (Int) -> Unit = {},
 ) {
     val track = state.current
     var immersive by remember { mutableStateOf(false) }
     var appearanceOpen by remember { mutableStateOf(false) }
+    var sleepSheetOpen by remember { mutableStateOf(false) }
     if (immersive) {
         BackHandler { immersive = false }
         ImmersiveLyrics(
@@ -138,6 +141,28 @@ fun LxMusicPlayerScreen(
                 )
             }
             Spacer(Modifier.weight(1f))
+            if (state.sleepTimerEndAtMs > 0L) {
+                Text(
+                    text = stringResource(
+                        R.string.music_sleep_remaining,
+                        state.sleepMinutesLeft,
+                    ),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.padding(end = 2.dp),
+                )
+            }
+            IconButton(onClick = { sleepSheetOpen = true }) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_sleep_timer),
+                    contentDescription = stringResource(R.string.music_sleep_timer),
+                    tint = if (state.sleepTimerEndAtMs > 0L) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        Color.White
+                    },
+                )
+            }
             IconButton(onClick = { appearanceOpen = true }) {
                 Icon(
                     painter = painterResource(R.drawable.ic_settings_theme),
@@ -386,6 +411,37 @@ fun LxMusicPlayerScreen(
         }
     }
     }
+    }
+
+    if (sleepSheetOpen) {
+        val sleepMinutes = listOf(0, 15, 30, 45, 60)
+        val offLabel = stringResource(R.string.music_sleep_off)
+        val sleepLabels = sleepMinutes.map { minutes ->
+            if (minutes == 0) {
+                offLabel
+            } else {
+                stringResource(R.string.music_sleep_minutes, minutes)
+            }
+        }
+        val sleepTitle = if (state.sleepTimerEndAtMs > 0L) {
+            stringResource(R.string.music_sleep_timer) + " · " + stringResource(
+                R.string.music_sleep_remaining,
+                state.sleepMinutesLeft,
+            )
+        } else {
+            stringResource(R.string.music_sleep_timer)
+        }
+        AVBoxOptionSheet(
+            onDismissRequest = { sleepSheetOpen = false },
+            title = sleepTitle,
+            options = sleepLabels,
+            selected = if (state.sleepTimerEndAtMs > 0L) null else offLabel,
+            onSelect = { label ->
+                sleepSheetOpen = false
+                val index = sleepLabels.indexOf(label)
+                onSleepTimerSelected(if (index >= 0) sleepMinutes[index] else 0)
+            },
+        )
     }
 
     if (appearanceOpen) {

@@ -5,10 +5,19 @@
 
 package com.github.avbox.osc.ui.page
 
+import android.content.ComponentName
+import android.content.Context
+import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -53,10 +62,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -67,6 +78,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.changedToUp
@@ -85,19 +97,35 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionToken
 import coil3.compose.AsyncImage
 import com.github.avbox.osc.R
+import com.github.avbox.osc.music.LxBridge
+import com.github.avbox.osc.music.LxPlaybackService
 import com.github.avbox.osc.music.MusicChart
 import com.github.avbox.osc.music.MusicTrack
+import com.github.avbox.osc.music.NowPlayingState
+import com.github.avbox.osc.music.PyMusicBridge
+import com.github.avbox.osc.music.PyMusicSources
 import com.github.avbox.osc.ui.components.AVBoxAlertDialog
+import com.github.avbox.osc.ui.music.LxLoopMode
 import com.github.avbox.osc.ui.music.LxMusicPlayerActivity
 import com.github.avbox.osc.ui.music.MusicAppearance
 import com.github.avbox.osc.ui.music.MusicAppearanceSheet
 import com.github.avbox.osc.ui.music.MusicBackground
 import com.github.avbox.osc.util.KV
+import com.google.common.util.concurrent.ListenableFuture
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
+import kotlin.random.Random
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun MusicPage(
@@ -171,6 +199,69 @@ fun MusicPage(
         }
     }
 
+    // Mini player bar: the shared now-playing record plus this page's
+    // own lightweight MediaController for service-backed records. The
+    // connection is best-effort — any failure just keeps the bar
+    // hidden and never affects the page itself.
+    val nowPlaying by NowPlayingState.info.collectAsStateWithLifecycle()
+    var miniController by remember { mutableStateOf<MediaController?>(null) }
+    val barScope = rememberCoroutineScope()
+    DisposableEffect(nowPlaying?.serviceBacked) {
+        if (nowPlaying?.serviceBacked != true) {
+            return@DisposableEffect onDispose { }
+        }
+        val appContext = context.applicationContext
+        var future: ListenableFuture<MediaController>? = null
+        var disposed = false
+        try {
+            val token = SessionToken(
+                appContext,
+                ComponentName(appContext, LxPlaybackService::class.java),
+            )
+            val built = MediaController.Builder(appContext, token).buildAsync()
+            future = built
+            built.addListener(
+                {
+                    val mc = try {
+                        built.get()
+                    } catch (t: Throwable) {
+                        null
+                    }
+                    if (mc != null && !disposed) {
+                        miniController = mc
+                    } else {
+                        try {
+                            mc?.release()
+                        } catch (t: Throwable) {
+                            // already gone
+                        }
+                    }
+                },
+                ContextCompat.getMainExecutor(appContext),
+            )
+        } catch (t: Throwable) {
+            // silent: no controller, no bar
+        }
+        onDispose {
+            disposed = true
+            miniController?.let { mc ->
+                try {
+                    mc.release()
+                } catch (t: Throwable) {
+                    // already gone
+                }
+            }
+            miniController = null
+            try {
+                future?.cancel(true)
+            } catch (t: Throwable) {
+                // already done or released above
+            }
+        }
+    }
+    val miniBarVisible = nowPlaying != null &&
+        (nowPlaying?.serviceBacked != true || miniController != null)
+
     Box(modifier = Modifier.fillMaxSize()) {
         // Custom background (when set) spans the whole page; the content
         // box below keeps its original insets and FAB bounds measurement.
@@ -187,11 +278,48 @@ fun MusicPage(
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Spacer(Modifier.height(12.dp))
-            // First row: the platform chips act as the resource-site switcher
-            // and span the full width; the source-script entry moved to the
-            // draggable floating button overlaid on the page.
+            // Top row: animated note, the search field and the appearance
+            // entry. The field lives here in both native and spider mode
+            // (it used to sit inside the mode contents below); its query
+            // state, IME search action and pill styling are unchanged,
+            // only the search target differs (native search switches to
+            // the search mode first so the results stay visible).
             Row(
                 modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                AnimatedMusicNote()
+                MusicSearchField(
+                    query = query,
+                    onQueryChange = { query = it },
+                    onSearch = {
+                        if (pyActive) {
+                            vm.pySearch(query)
+                        } else {
+                            if (mode != MusicMode.SEARCH) {
+                                vm.selectMode(MusicMode.SEARCH)
+                            }
+                            vm.search(query)
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { appearanceOpen = true }) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_settings_theme),
+                        contentDescription = stringResource(R.string.music_appearance),
+                    )
+                }
+            }
+
+            // Second row: the platform chips act as the resource-site
+            // switcher and span the full width; the source-script entry
+            // moved to the draggable floating button overlaid on the page.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 LazyRow(
@@ -220,18 +348,18 @@ fun MusicPage(
                 }
             }
 
-            // Second row: search / charts / favourites mode switch,
-            // appearance at the end. The mode chips are hidden in spider
-            // mode (a py source has no platform charts), while the native
-            // mode state is left untouched; appearance stays available.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (!pyActive) {
+            // Third row: search / charts / favourites mode switch. The
+            // row only exists in native mode (a py source has no platform
+            // charts), while the native mode state is left untouched in
+            // spider mode; appearance lives in the top search row now.
+            if (!pyActive) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     FilterChip(
                         selected = mode == MusicMode.SEARCH,
                         onClick = { vm.selectMode(MusicMode.SEARCH) },
@@ -248,25 +376,19 @@ fun MusicPage(
                         label = { Text(stringResource(R.string.music_favorites_title)) },
                     )
                 }
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = { appearanceOpen = true }) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_settings_theme),
-                        contentDescription = stringResource(R.string.music_appearance),
-                    )
-                }
             }
 
             BackHandler(enabled = mode == MusicMode.CHARTS && selectedChart != null) {
                 vm.closeChart()
             }
 
-            Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = if (miniBarVisible) 64.dp else 0.dp),
+            ) {
                 if (pyActive) {
                     PySpiderContent(
-                        query = query,
-                        onQueryChange = { query = it },
-                        onSearch = { vm.pySearch(query) },
                         items = pyItems,
                         loading = pyLoading,
                         loadingMore = pyLoadingMore,
@@ -309,19 +431,8 @@ fun MusicPage(
                         },
                     )
                 } else {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        MusicSearchField(
-                            query = query,
-                            onQueryChange = { query = it },
-                            onSearch = { vm.search(query) },
-                            modifier = Modifier.padding(top = 12.dp),
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                        ) {
-                            when {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        when {
                                 loading -> {
                                     CircularProgressIndicator(
                                         modifier = Modifier.align(Alignment.Center),
@@ -410,8 +521,80 @@ fun MusicPage(
                                 }
                             }
                         }
-                    }
                 }
+            }
+        }
+        if (miniBarVisible) {
+            val np = nowPlaying
+            if (np != null) {
+                MiniPlayerBar(
+                    info = np,
+                    controlsEnabled = if (np.serviceBacked) {
+                        miniController != null
+                    } else {
+                        NowPlayingState.localControls != null
+                    },
+                    onBodyClick = { LxMusicPlayerActivity.startAttached(context) },
+                    onPlayPause = {
+                        try {
+                            if (np.serviceBacked) {
+                                val mc = miniController
+                                if (mc != null) {
+                                    if (mc.isPlaying) mc.pause() else mc.play()
+                                }
+                            } else {
+                                NowPlayingState.localControls?.playPause()
+                            }
+                        } catch (t: Throwable) {
+                            // a dead session must not break the page
+                        }
+                    },
+                    onNext = {
+                        if (np.serviceBacked) {
+                            val mc = miniController
+                            if (mc != null && np.canNext) {
+                                barScope.launch {
+                                    val queue = MusicTrack.listFromJson(np.queueJson)
+                                    val next = barNextIndex(queue.size, np.queueIndex)
+                                    if (next != null &&
+                                        !playBarTrack(context, mc, queue, next)
+                                    ) {
+                                        Toast.makeText(
+                                            context,
+                                            R.string.music_resolve_failed,
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                }
+                            }
+                        } else {
+                            try {
+                                NowPlayingState.localControls?.next()
+                            } catch (t: Throwable) {
+                                // a dead session must not break the page
+                            }
+                        }
+                    },
+                    onClose = {
+                        if (np.serviceBacked) {
+                            try {
+                                miniController?.stop()
+                            } catch (t: Throwable) {
+                                // already gone
+                            }
+                        } else {
+                            try {
+                                NowPlayingState.localControls?.stop()
+                            } catch (t: Throwable) {
+                                // already gone
+                            }
+                        }
+                        NowPlayingState.clear()
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 4.dp),
+                )
             }
         }
         MusicSourceFab(
@@ -598,17 +781,15 @@ private fun ScriptOptionRow(
 }
 
 /**
- * Spider-mode content: the search field drives the spider's
- * searchContent, the list below shows either the selected category feed
- * or the search results, paged by scrolling like the native search list.
- * Rows reuse [MusicTrackRow]: cover, name and remarks (singer) come from
- * the vod fields the bridge mapped onto the track.
+ * Spider-mode content: search runs from the page's top search row
+ * through the spider's searchContent; the list below shows either the
+ * selected category feed or the search results, paged by scrolling
+ * like the native search list. Rows reuse [MusicTrackRow]: cover,
+ * name and remarks (singer) come from the vod fields the bridge
+ * mapped onto the track.
  */
 @Composable
 private fun PySpiderContent(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    onSearch: () -> Unit,
     items: List<MusicTrack>,
     loading: Boolean,
     loadingMore: Boolean,
@@ -618,17 +799,11 @@ private fun PySpiderContent(
     onItemClick: (MusicTrack) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        MusicSearchField(
-            query = query,
-            onQueryChange = onQueryChange,
-            onSearch = onSearch,
-            modifier = Modifier.padding(top = 12.dp),
-        )
         if (searchActive) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 4.dp),
+                    .padding(top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -696,6 +871,48 @@ private fun PySpiderContent(
             }
         }
     }
+}
+
+/**
+ * The music note at the start of the top search row, gently bobbing and
+ * tilting on an infinite transition (same animation APIs as the shimmer
+ * in ui/components/Skeleton.kt). Amplitudes stay small (±3dp, ±8°) and
+ * the full cycle is 1.2s (600ms each way, reversed), so the single 24dp
+ * icon costs nothing measurable next to the lists below.
+ */
+@Composable
+private fun AnimatedMusicNote() {
+    val transition = rememberInfiniteTransition(label = "musicNote")
+    val bobLimitPx = with(LocalDensity.current) { 3.dp.toPx() }
+    val bob by transition.animateFloat(
+        initialValue = -bobLimitPx,
+        targetValue = bobLimitPx,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 600, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "musicNoteBob",
+    )
+    val tilt by transition.animateFloat(
+        initialValue = -8f,
+        targetValue = 8f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 600, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "musicNoteTilt",
+    )
+    Icon(
+        painter = painterResource(R.drawable.ic_tab_music),
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier
+            .size(24.dp)
+            .graphicsLayer {
+                translationY = bob
+                rotationZ = tilt
+            },
+    )
 }
 
 /**
@@ -1166,5 +1383,228 @@ private fun sourceLabel(code: String): String {
         "wy" -> stringResource(R.string.music_source_wy)
         "mg" -> stringResource(R.string.music_source_mg)
         else -> code
+    }
+}
+
+/**
+ * The music page's mini player bar: cover, title, singer and
+ * play/pause + next + close for the shared now-playing record. Pure
+ * rendering — every action is a callback wired up in MusicPage.
+ */
+@Composable
+private fun MiniPlayerBar(
+    info: NowPlayingState.Info,
+    controlsEnabled: Boolean,
+    onBodyClick: () -> Unit,
+    onPlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onBodyClick() },
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 3.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AsyncImage(
+                model = info.img,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(8.dp)),
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = info.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = info.singer,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            IconButton(onClick = onPlayPause, enabled = controlsEnabled) {
+                Icon(
+                    painter = painterResource(
+                        if (info.isPlaying) {
+                            R.drawable.player_ic_pause
+                        } else {
+                            R.drawable.player_ic_play
+                        },
+                    ),
+                    contentDescription = stringResource(
+                        if (info.isPlaying) {
+                            R.string.common_pause
+                        } else {
+                            R.string.common_play
+                        },
+                    ),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            IconButton(
+                onClick = onNext,
+                enabled = controlsEnabled && info.canNext,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.player_ic_next),
+                    contentDescription = stringResource(R.string.music_next),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            IconButton(onClick = onClose, enabled = controlsEnabled) {
+                Icon(
+                    painter = painterResource(R.drawable.player_ic_close),
+                    contentDescription = stringResource(R.string.music_mini_close),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+    }
+}
+
+/** Loop mode the player page persisted (the KV key is shared with it). */
+private fun barLoopMode(): LxLoopMode {
+    val saved: String = KV.get("lx_loop_mode", "")
+    return LxLoopMode.fromName(saved)
+}
+
+/** Manual-next availability, mirroring the player page's rule. */
+private fun barCanNext(size: Int, index: Int): Boolean {
+    if (size <= 1) return false
+    return !(barLoopMode() == LxLoopMode.ORDER && index >= size - 1)
+}
+
+/** Next queue index for the mini bar, mirroring the player page. */
+private fun barNextIndex(size: Int, index: Int): Int? {
+    if (size <= 0) return null
+    return when (barLoopMode()) {
+        LxLoopMode.SHUFFLE -> {
+            if (size <= 1) {
+                index
+            } else {
+                var next = Random.nextInt(size)
+                while (next == index) {
+                    next = Random.nextInt(size)
+                }
+                next
+            }
+        }
+
+        LxLoopMode.ORDER -> if (index < size - 1) index + 1 else null
+        else -> (index + 1) % size
+    }
+}
+
+/** Display name of a track's source for a mini-bar-published record. */
+private fun barSourceLabel(context: Context, track: MusicTrack): String {
+    if (track.isPy) {
+        return PyMusicSources.findDef(context, track.pySourceId)?.name
+            ?: context.getString(R.string.music_py_fallback)
+    }
+    return when (track.source) {
+        "kg" -> context.getString(R.string.music_source_kg)
+        "kw" -> context.getString(R.string.music_source_kw)
+        "tx" -> context.getString(R.string.music_source_tx)
+        "wy" -> context.getString(R.string.music_source_wy)
+        "mg" -> context.getString(R.string.music_source_mg)
+        else -> track.source
+    }
+}
+
+/**
+ * Pushes a track's HTTP headers to the playback service, the same
+ * custom-command protocol the player page uses (best effort, bounded).
+ */
+private suspend fun sendBarHeaders(
+    mc: MediaController,
+    headers: Map<String, String>,
+) {
+    try {
+        val args = Bundle()
+        args.putStringArrayList(
+            LxPlaybackService.EXTRA_HEADER_KEYS,
+            ArrayList(headers.keys),
+        )
+        for ((key, value) in headers) {
+            args.putString(LxPlaybackService.EXTRA_HEADER_VALUE_PREFIX + key, value)
+        }
+        val future = mc.sendCustomCommand(
+            SessionCommand(LxPlaybackService.ACTION_SET_HEADERS, Bundle()),
+            args,
+        )
+        withContext(Dispatchers.IO) {
+            future.get(2000L, TimeUnit.MILLISECONDS)
+        }
+    } catch (t: Throwable) {
+        if (t is kotlinx.coroutines.CancellationException) throw t
+        // best effort only
+    }
+}
+
+/**
+ * Mini-bar "next": resolves [queue]'s track at [index] exactly like
+ * the player page does (LX script or py spider), publishes the new
+ * now-playing record, then hands the MediaItem to the service through
+ * the page's controller. Returns false on any failure; the caller
+ * toasts and the current song keeps playing.
+ */
+private suspend fun playBarTrack(
+    context: Context,
+    controller: MediaController,
+    queue: List<MusicTrack>,
+    index: Int,
+): Boolean {
+    val track = queue.getOrNull(index) ?: return false
+    return try {
+        val url: String
+        val headers: Map<String, String>
+        if (track.isPy) {
+            val def = PyMusicSources.findDef(context, track.pySourceId)
+                ?: return false
+            val resolved = PyMusicBridge.resolve(context, def, track)
+            url = resolved.url
+            headers = resolved.headers
+        } else {
+            url = LxBridge.getMusicUrl(track)
+            headers = emptyMap()
+        }
+        sendBarHeaders(controller, headers)
+        NowPlayingState.publish(
+            NowPlayingState.Info(
+                trackKey = NowPlayingState.keyOf(track),
+                title = track.name,
+                singer = track.singer,
+                img = track.img,
+                sourceLabel = barSourceLabel(context, track),
+                isPlaying = true,
+                canNext = barCanNext(queue.size, index),
+                serviceBacked = true,
+                queueJson = MusicTrack.listToJson(queue),
+                queueIndex = index,
+            ),
+        )
+        controller.setMediaItem(NowPlayingState.mediaItemFor(track, url))
+        controller.prepare()
+        controller.play()
+        true
+    } catch (t: Throwable) {
+        false
     }
 }

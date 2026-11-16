@@ -1,5 +1,6 @@
 package com.github.avbox.osc.ui.music
 
+import android.content.ComponentName
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -9,20 +10,24 @@ import android.media.audiofx.Equalizer
 import android.media.audiofx.Virtualizer
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionToken
 import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
@@ -30,7 +35,11 @@ import coil3.toBitmap
 import com.github.avbox.osc.R
 import com.github.avbox.osc.music.LxBridge
 import com.github.avbox.osc.music.LxFavorites
+import com.github.avbox.osc.music.LxPlaybackService
+import com.github.avbox.osc.music.LyricMatcher
 import com.github.avbox.osc.music.MusicApi
+import com.github.avbox.osc.music.MusicCrashLog
+import com.github.avbox.osc.music.NowPlayingState
 import com.github.avbox.osc.music.MusicTrack
 import com.github.avbox.osc.music.PyMusicBridge
 import com.github.avbox.osc.music.PyMusicSources
@@ -40,15 +49,21 @@ import com.github.avbox.osc.ui.components.SheetHostScaffold
 import com.github.avbox.osc.ui.theme.AVBoxTheme
 import com.github.avbox.osc.ui.theme.enableTransparentEdgeToEdge
 import com.github.avbox.osc.util.KV
+import com.github.avbox.osc.util.PermissionHelper
+import com.google.common.util.concurrent.ListenableFuture
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 import kotlin.random.Random
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -58,15 +73,49 @@ import okhttp3.Request
  * the LX source script (LxBridge); it deliberately does not go through the
  * VOD Detail/PlayLoader pipeline (the existing ui.MusicPlayerActivity is
  * bound to a VOD playback session and cannot take an external queue).
+ *
+ * Playback target (v1.13.3): the player first tries the background
+ * [LxPlaybackService] through a MediaController; if connecting fails,
+ * times out or drops, the whole session degrades to the in-Activity
+ * ExoPlayer (the pre-v1.13.3 behaviour) and never retries, so the worst
+ * case is exactly the old player. All queue/loop/progress logic talks
+ * to the [Player] interface, which the controller also implements.
  */
 class LxMusicPlayerActivity : BaseActivity() {
+
+    /** Which playback target this session locked onto at its first start. */
+    private enum class PlaybackMode { UNKNOWN, SERVICE, LOCAL }
 
     companion object {
         private const val EXTRA_QUEUE = "lx_queue"
         private const val EXTRA_INDEX = "lx_index"
 
+        /** Set by [startAttached]: bind to the live service session. */
+        private const val EXTRA_ATTACH = "lx_attach"
+
         /** KV key for the persisted loop mode (LxLoopMode name). */
         private const val KV_LOOP_MODE = "lx_loop_mode"
+
+        /** How long building the MediaController may take before degrading. */
+        private const val SERVICE_CONNECT_TIMEOUT_MS = 3000L
+
+        /** How long the first playAt waits for the connection attempt. */
+        private const val SERVICE_CONNECT_WAIT_MS = 3500L
+
+        /** Timeout for one custom command round-trip to the service. */
+        private const val SERVICE_COMMAND_TIMEOUT_MS = 2000L
+
+        /**
+         * Last queue handed to [start] in this process, remembered so a
+         * queue-less relaunch (notification / session-activity tap after
+         * the previous instance was destroyed) can restore the page
+         * instead of finishing instantly.
+         */
+        @Volatile
+        private var lastQueueJson: String? = null
+
+        @Volatile
+        private var lastIndex: Int = 0
 
         /** AudioFX strength scale is 0..1000; v1.12.0 uses the maximum. */
         private const val EQ_EFFECT_STRENGTH: Short = 1000
@@ -82,10 +131,26 @@ class LxMusicPlayerActivity : BaseActivity() {
         private val CURVE_BRIGHT_ANCHORS = floatArrayOf(-0.25f, -0.05f, 0.2f, 0.65f, 1.0f)
 
         fun start(context: Context, queueJson: String, index: Int) {
+            lastQueueJson = queueJson
+            lastIndex = index
             context.startActivity(
                 Intent(context, LxMusicPlayerActivity::class.java)
                     .putExtra(EXTRA_QUEUE, queueJson)
                     .putExtra(EXTRA_INDEX, index),
+            )
+        }
+
+        /**
+         * Opens the player page attached to the session the service is
+         * already playing (the music page mini bar's body tap): no queue
+         * extra, and the remembered queue is left untouched — init
+         * restores it and binds the UI to the live session instead of
+         * restarting the song.
+         */
+        fun startAttached(context: Context) {
+            context.startActivity(
+                Intent(context, LxMusicPlayerActivity::class.java)
+                    .putExtra(EXTRA_ATTACH, true),
             )
         }
     }
@@ -97,6 +162,84 @@ class LxMusicPlayerActivity : BaseActivity() {
     private var tickerJob: Job? = null
     private var colorJob: Job? = null
     private var downloadJob: Job? = null
+
+    // Background-service playback (v1.13.3). The controller, once built,
+    // is just another Player; playbackMode locks at the first start and
+    // only ever moves SERVICE -> LOCAL (degrade), never back.
+    private var controller: MediaController? = null
+    private var controllerFuture: ListenableFuture<MediaController>? = null
+    private var connectJob: Job? = null
+    private var attachJob: Job? = null
+    private var playbackMode = PlaybackMode.UNKNOWN
+    private var serviceDegraded = false
+
+    /** Audio session id of the service player, fetched by custom command. */
+    private var serviceSessionId = 0
+    private var sessionIdFetchJob: Job? = null
+
+    /**
+     * Playback events shared by the local player and the service
+     * controller: only the mode-locked target ever has media, so the
+     * idle side stays silent.
+     */
+    private val playerListener = object : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            state.buffering = playbackState == Player.STATE_BUFFERING
+            if (playbackState == Player.STATE_READY) {
+                ensureEffects()
+            }
+            if (playbackState == Player.STATE_ENDED) {
+                advanceAuto()
+            }
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            state.playing = isPlaying
+            // Keep the mini bar's playing flag in sync, but only for
+            // the record of the song this page is showing.
+            val current = state.current
+            val info = NowPlayingState.current()
+            if (current != null && info != null &&
+                info.trackKey == NowPlayingState.keyOf(current)
+            ) {
+                NowPlayingState.updatePlaying(isPlaying)
+            }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            state.buffering = false
+            state.errorText = error.message ?: getString(R.string.music_resolve_failed)
+        }
+    }
+
+    /**
+     * Mini-bar controls for the local (degraded) mode, registered in
+     * [NowPlayingState] while this Activity owns local playback. The
+     * bar's service-mode buttons go through its own MediaController
+     * instead; these only ever run on the main thread (click handlers).
+     */
+    private val localControlsImpl = object : NowPlayingState.LocalControls {
+        override fun playPause() {
+            togglePlay()
+        }
+
+        override fun next() {
+            playNextManual()
+        }
+
+        override fun stop() {
+            resolveJob?.cancel()
+            try {
+                player?.pause()
+                player?.stop()
+            } catch (t: Throwable) {
+                // already stopped; the record is cleared either way
+            }
+            state.playing = false
+            state.buffering = false
+            NowPlayingState.clear()
+        }
+    }
 
     // Sound effects (AudioFX) attached to the player's audio session. Any
     // of them may be null on devices without audiofx support; every use is
@@ -111,19 +254,37 @@ class LxMusicPlayerActivity : BaseActivity() {
     override fun hideSysBar() {}
 
     override fun init() {
+        MusicCrashLog.install(this)
         enableTransparentEdgeToEdge()
-        val queue = MusicTrack.listFromJson(intent?.getStringExtra(EXTRA_QUEUE))
+        PermissionHelper.requestNotificationIfNeeded(this)
+        var queue = MusicTrack.listFromJson(intent?.getStringExtra(EXTRA_QUEUE))
+        var startIndex = intent?.getIntExtra(EXTRA_INDEX, 0) ?: 0
+        if (queue.isEmpty()) {
+            // Queue-less launch (notification / session-activity tap
+            // after the previous instance was destroyed): restore the
+            // queue remembered from the last start() in this process
+            // instead of finishing instantly.
+            val remembered = lastQueueJson
+            if (!remembered.isNullOrEmpty()) {
+                queue = MusicTrack.listFromJson(remembered)
+                startIndex = lastIndex
+            }
+        }
         if (queue.isEmpty()) {
             finish()
             return
         }
+        lastQueueJson = MusicTrack.listToJson(queue)
         state.queue = queue
-        state.index = (intent?.getIntExtra(EXTRA_INDEX, 0) ?: 0).coerceIn(0, queue.size - 1)
+        state.index = startIndex.coerceIn(0, queue.size - 1)
         // The "" default matters: KV returns null for unregistered keys
         // when no default is given (the v1.9.0 music-import bug).
         val savedLoopMode: String = KV.get(KV_LOOP_MODE, "")
         state.loopMode = LxLoopMode.fromName(savedLoopMode)
         buildPlayer()
+        // Try the background service in parallel; the first playAt
+        // awaits the outcome (bounded) before locking the mode in.
+        connectJob = lifecycleScope.launch { connectService() }
         findViewById<ComposeView>(R.id.compose_view).setContent {
             AVBoxTheme {
                 SheetHostScaffold {
@@ -133,7 +294,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                         onTogglePlay = { togglePlay() },
                         onNext = { playNextManual() },
                         onPrev = { playAt(state.index - 1) },
-                        onSeek = { ms -> player?.seekTo(ms) },
+                        onSeek = { ms -> activePlayer()?.seekTo(ms) },
                         onToggleQueue = { state.showQueue = !state.showQueue },
                         onSelectQueueItem = { i ->
                             state.showQueue = false
@@ -147,22 +308,100 @@ class LxMusicPlayerActivity : BaseActivity() {
                         onToggleLoopMode = { toggleLoopMode() },
                         onToggleFavorite = { toggleFavorite() },
                         onDownload = { downloadCurrent() },
+                        onSleepTimerSelected = { minutes -> applySleepTimer(minutes) },
                     )
                 }
             }
         }
         tickerJob = lifecycleScope.launch {
             while (true) {
-                val exo = player
-                if (exo != null) {
-                    state.positionMs = exo.currentPosition.coerceAtLeast(0L)
-                    val duration = exo.duration
+                val target = activePlayer()
+                if (target != null) {
+                    state.positionMs = target.currentPosition.coerceAtLeast(0L)
+                    val duration = target.duration
                     if (duration > 0) state.durationMs = duration
                 }
+                checkSleepTimer()
                 delay(400)
             }
         }
-        playAt(state.index)
+        if (!tryAttach()) {
+            playAt(state.index)
+        }
+    }
+
+    /**
+     * Attach entry (mini bar body tap): when the shared now-playing
+     * record names a service-backed song that is part of the restored
+     * queue, set the page up for that song WITHOUT starting playback
+     * and bind to the live session instead. Any mismatch — no record,
+     * a local record, the song is not in the queue — returns false and
+     * init falls back to the normal fresh start, so a stale bar can
+     * never produce a dead page.
+     */
+    private fun tryAttach(): Boolean {
+        if (intent?.getBooleanExtra(EXTRA_ATTACH, false) != true) return false
+        val np = NowPlayingState.current() ?: return false
+        if (!np.serviceBacked) return false
+        val idx = state.queue.indexOfFirst {
+            NowPlayingState.keyOf(it) == np.trackKey
+        }
+        if (idx < 0) return false
+        val track = state.queue[idx]
+        state.index = idx
+        lastIndex = idx
+        state.sourceLabel = sourceLabelFor(track)
+        state.errorText = null
+        state.lyricLines = emptyList()
+        state.playing = np.isPlaying
+        state.buffering = false
+        state.isFavorite = LxFavorites.isFavorite(track)
+        updateCoverColor(track)
+        loadLyrics(track, idx)
+        attachJob = lifecycleScope.launch { bindAttachedSession(np) }
+        return true
+    }
+
+    /**
+     * Waits (bounded) for the service connection, locks the session to
+     * SERVICE and adopts the controller's live state — position and
+     * duration follow through the ticker, which reads the same
+     * controller. If the connection failed, or the service is not
+     * actually playing the record's song (checked by MediaItem
+     * mediaId), the attach is abandoned and the song starts fresh
+     * through the normal path.
+     */
+    private suspend fun bindAttachedSession(np: NowPlayingState.Info) {
+        val job = connectJob
+        if (job != null && !serviceDegraded) {
+            withTimeoutOrNull(SERVICE_CONNECT_WAIT_MS) { job.join() }
+        }
+        val mc = controller
+        if (serviceDegraded || mc == null || !mc.isConnected()) {
+            playbackMode = PlaybackMode.LOCAL
+            NowPlayingState.localControls = localControlsImpl
+            playAt(state.index)
+            return
+        }
+        playbackMode = PlaybackMode.SERVICE
+        NowPlayingState.localControls = null
+        val currentItem = try {
+            mc.currentMediaItem
+        } catch (t: Throwable) {
+            null
+        }
+        if (currentItem == null || currentItem.mediaId != np.trackKey) {
+            playAt(state.index)
+            return
+        }
+        mc.repeatMode = if (state.loopMode == LxLoopMode.SINGLE) {
+            Player.REPEAT_MODE_ONE
+        } else {
+            Player.REPEAT_MODE_OFF
+        }
+        state.playing = mc.isPlaying
+        state.buffering = mc.playbackState == Player.STATE_BUFFERING
+        ensureEffects()
     }
 
     /**
@@ -194,26 +433,7 @@ class LxMusicPlayerActivity : BaseActivity() {
         } else {
             Player.REPEAT_MODE_OFF
         }
-        exo.addListener(object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                state.buffering = playbackState == Player.STATE_BUFFERING
-                if (playbackState == Player.STATE_READY) {
-                    ensureEffects()
-                }
-                if (playbackState == Player.STATE_ENDED) {
-                    advanceAuto()
-                }
-            }
-
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                state.playing = isPlaying
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                state.buffering = false
-                state.errorText = error.message ?: getString(R.string.music_resolve_failed)
-            }
-        })
+        exo.addListener(playerListener)
         player = exo
     }
 
@@ -222,6 +442,7 @@ class LxMusicPlayerActivity : BaseActivity() {
         if (queue.isEmpty()) return
         val index = ((target % queue.size) + queue.size) % queue.size
         state.index = index
+        lastIndex = index
         val track = queue[index]
         state.sourceLabel = sourceLabelFor(track)
         state.errorText = null
@@ -262,12 +483,8 @@ class LxMusicPlayerActivity : BaseActivity() {
                         state.qualityText = LxBridge.lastResolvedQuality()?.uppercase() ?: ""
                     }
                 }
-                val exo = player ?: return@launch
-                httpDataSourceFactory.setDefaultRequestProperties(currentHeaders)
-                exo.setMediaItem(MediaItem.fromUri(url))
-                exo.prepare()
+                startPlayback(track, url)
                 ensureEffects()
-                exo.play()
             } catch (e: PyMusicBridge.PyParseRequiredException) {
                 state.buffering = false
                 val message = getString(R.string.music_py_parse_unsupported)
@@ -280,17 +497,28 @@ class LxMusicPlayerActivity : BaseActivity() {
                 Toast.makeText(this@LxMusicPlayerActivity, message, Toast.LENGTH_SHORT).show()
             }
         }
+        loadLyrics(track, index)
+    }
+
+    /**
+     * Lyrics load in parallel with playback and fill in when ready.
+     * Platform tracks use their own platform lyric; py spider tracks
+     * provide none, so LyricMatcher looks the song up on NetEase/QQ
+     * and reuses those lyric endpoints (v1.13.3). A miss keeps the
+     * screen's no-lyrics text and never affects playback. Shared by
+     * the fresh-start path and the mini-bar attach path.
+     */
+    private fun loadLyrics(track: MusicTrack, index: Int) {
         lyricJob?.cancel()
-        // Py spiders provide no lyrics: leave the lyric area empty (the
-        // screen shows its no-lyrics text) instead of force-matching a
-        // platform lyric onto a spider song.
-        if (!track.isPy) {
-            lyricJob = lifecycleScope.launch {
-                val raw = MusicApi.lyric(track)
-                if (state.index != index) return@launch
-                if (!raw.isNullOrBlank()) {
-                    state.lyricLines = MusicLrc.parse(raw)
-                }
+        lyricJob = lifecycleScope.launch {
+            val raw = if (track.isPy) {
+                LyricMatcher.matchLyric(track)
+            } else {
+                MusicApi.lyric(track)
+            }
+            if (state.index != index) return@launch
+            if (!raw.isNullOrBlank()) {
+                state.lyricLines = MusicLrc.parse(raw)
             }
         }
     }
@@ -322,12 +550,309 @@ class LxMusicPlayerActivity : BaseActivity() {
             ?: throw IllegalStateException(getString(R.string.music_py_source_missing))
     }
 
-    private fun togglePlay() {
-        val exo = player ?: return
-        if (exo.isPlaying) {
-            exo.pause()
+    // ------------------------------------------------- service playback
+
+    /**
+     * Builds the MediaController to [LxPlaybackService]. Any failure —
+     * exception, error future, or the connect timeout — degrades the
+     * session to the local player via [degradeToLocal]; this function
+     * never throws.
+     */
+    private suspend fun connectService() {
+        try {
+            val token = SessionToken(
+                this,
+                ComponentName(this, LxPlaybackService::class.java),
+            )
+            val future = MediaController.Builder(this, token).buildAsync()
+            controllerFuture = future
+            val mc = withTimeoutOrNull(SERVICE_CONNECT_TIMEOUT_MS) {
+                suspendCancellableCoroutine<MediaController?> { cont ->
+                    future.addListener(
+                        {
+                            val built = try {
+                                future.get()
+                            } catch (t: Throwable) {
+                                null
+                            }
+                            if (cont.isActive) cont.resume(built)
+                        },
+                        ContextCompat.getMainExecutor(this@LxMusicPlayerActivity),
+                    )
+                }
+            }
+            if (mc == null) {
+                degradeToLocal()
+                return
+            }
+            controller = mc
+            mc.addListener(playerListener)
+            mc.repeatMode = if (state.loopMode == LxLoopMode.SINGLE) {
+                Player.REPEAT_MODE_ONE
+            } else {
+                Player.REPEAT_MODE_OFF
+            }
+        } catch (t: Throwable) {
+            degradeToLocal()
+        }
+    }
+
+    /**
+     * Permanently falls back to the in-Activity player for the rest of
+     * this session: the service is never retried, so a broken service
+     * link costs one bounded wait, not a failure per song.
+     */
+    private fun degradeToLocal() {
+        serviceDegraded = true
+        if (playbackMode == PlaybackMode.SERVICE) {
+            playbackMode = PlaybackMode.LOCAL
+        }
+        val mc = controller
+        controller = null
+        serviceSessionId = 0
+        if (mc != null) {
+            try {
+                mc.release()
+            } catch (t: Throwable) {
+                // already gone; the local player is unaffected
+            }
+        }
+        // The session is local from here on: the mini bar reaches it
+        // through the local controls, and a service-backed record of
+        // the song this page is showing becomes a local one.
+        NowPlayingState.localControls = localControlsImpl
+        val current = state.current
+        val info = NowPlayingState.current()
+        if (current != null && info != null && info.serviceBacked &&
+            info.trackKey == NowPlayingState.keyOf(current)
+        ) {
+            NowPlayingState.publish(
+                info.copy(serviceBacked = false, isPlaying = state.playing),
+            )
+        }
+    }
+
+    /**
+     * The player the UI controls right now: the service controller once
+     * the session locked onto it (and it is still connected), otherwise
+     * the local player.
+     */
+    private fun activePlayer(): Player? {
+        if (playbackMode == PlaybackMode.SERVICE) {
+            val mc = controller
+            if (mc != null && mc.isConnected()) {
+                return mc
+            }
+        }
+        return player
+    }
+
+    /**
+     * Resolves the playback target for a start, locking the session mode
+     * on the first call: waits (bounded) for the pending connection
+     * attempt, then picks the service when it connected, the local
+     * player otherwise. Later calls re-check the controller's
+     * connection and degrade if it dropped.
+     */
+    private suspend fun awaitActivePlayer(): Player? {
+        when (playbackMode) {
+            PlaybackMode.SERVICE -> {
+                val mc = controller
+                if (mc != null && mc.isConnected()) {
+                    return mc
+                }
+                degradeToLocal()
+                return player
+            }
+
+            PlaybackMode.LOCAL -> return player
+            PlaybackMode.UNKNOWN -> Unit
+        }
+        val job = connectJob
+        if (job != null && !serviceDegraded) {
+            withTimeoutOrNull(SERVICE_CONNECT_WAIT_MS) { job.join() }
+        }
+        val mc = controller
+        playbackMode = if (!serviceDegraded && mc != null && mc.isConnected()) {
+            // Apply the loop mode again: a toggle that happened while
+            // the connection was still pending only reached the local
+            // player (connectService applied the connect-time value).
+            mc.repeatMode = if (state.loopMode == LxLoopMode.SINGLE) {
+                Player.REPEAT_MODE_ONE
+            } else {
+                Player.REPEAT_MODE_OFF
+            }
+            NowPlayingState.localControls = null
+            PlaybackMode.SERVICE
         } else {
-            exo.play()
+            NowPlayingState.localControls = localControlsImpl
+            PlaybackMode.LOCAL
+        }
+        return if (playbackMode == PlaybackMode.SERVICE) mc else player
+    }
+
+    /**
+     * Hands one resolved track to the locked playback target. The
+     * MediaItem (NowPlayingState.mediaItemFor) carries the song key as
+     * mediaId plus title/artist/artwork metadata, so the service's
+     * media notification and lock screen show the song, not just a URL.
+     * In service mode the track's HTTP headers are pushed first (best
+     * effort); if the controller call itself fails, the session
+     * degrades and the local player takes this very track over.
+     */
+    private suspend fun startPlayback(track: MusicTrack, url: String) {
+        val item = NowPlayingState.mediaItemFor(track, url)
+        val target = awaitActivePlayer()
+        // Publish the mini-bar record before the hand-off: a service
+        // media transition fires inside setMediaItem and keeps these
+        // enrichment fields (queue, label, canNext).
+        NowPlayingState.publish(
+            NowPlayingState.Info(
+                trackKey = NowPlayingState.keyOf(track),
+                title = track.name,
+                singer = track.singer,
+                img = track.img,
+                sourceLabel = state.sourceLabel,
+                isPlaying = true,
+                canNext = canNextFromHere(),
+                serviceBacked = target is MediaController,
+                queueJson = MusicTrack.listToJson(state.queue),
+                queueIndex = state.index,
+            ),
+        )
+        if (target is MediaController) {
+            sendHeadersToService(target, currentHeaders)
+            try {
+                target.setMediaItem(item)
+                target.prepare()
+                target.play()
+                return
+            } catch (t: Throwable) {
+                degradeToLocal()
+            }
+        }
+        val exo = player ?: return
+        httpDataSourceFactory.setDefaultRequestProperties(currentHeaders)
+        exo.setMediaItem(item)
+        exo.prepare()
+        exo.play()
+    }
+
+    /** Manual-next availability of the current queue position. */
+    private fun canNextFromHere(): Boolean {
+        val size = state.queue.size
+        if (size <= 1) return false
+        return !(state.loopMode == LxLoopMode.ORDER && state.index >= size - 1)
+    }
+
+    /**
+     * Pushes the current track's HTTP headers to the playback service
+     * (see LxPlaybackService.ACTION_SET_HEADERS). Bounded and best
+     * effort: a failed hand-off never blocks playback.
+     */
+    private suspend fun sendHeadersToService(
+        mc: MediaController,
+        headers: Map<String, String>,
+    ) {
+        try {
+            val args = Bundle()
+            args.putStringArrayList(
+                LxPlaybackService.EXTRA_HEADER_KEYS,
+                ArrayList(headers.keys),
+            )
+            for ((key, value) in headers) {
+                args.putString(LxPlaybackService.EXTRA_HEADER_VALUE_PREFIX + key, value)
+            }
+            val future = mc.sendCustomCommand(
+                SessionCommand(LxPlaybackService.ACTION_SET_HEADERS, Bundle()),
+                args,
+            )
+            withContext(Dispatchers.IO) {
+                future.get(SERVICE_COMMAND_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            }
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            // best effort only
+        }
+    }
+
+    /**
+     * Fetches the service player's audio session id by custom command
+     * (MediaController exposes none) and re-runs [ensureEffects] once
+     * it lands. Failure leaves the EQ silently off in service mode.
+     */
+    private fun fetchServiceSessionId() {
+        val mc = controller ?: return
+        if (sessionIdFetchJob?.isActive == true) return
+        sessionIdFetchJob = lifecycleScope.launch {
+            try {
+                val future = mc.sendCustomCommand(
+                    SessionCommand(
+                        LxPlaybackService.ACTION_GET_AUDIO_SESSION_ID,
+                        Bundle(),
+                    ),
+                    Bundle(),
+                )
+                val result = withContext(Dispatchers.IO) {
+                    future.get(SERVICE_COMMAND_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                }
+                val id = result.extras.getInt(
+                    LxPlaybackService.EXTRA_AUDIO_SESSION_ID,
+                    0,
+                )
+                if (id > 0 && id != serviceSessionId) {
+                    serviceSessionId = id
+                    ensureEffects()
+                }
+            } catch (t: Throwable) {
+                // EQ stays off in service mode; playback is unaffected.
+            }
+        }
+    }
+
+    // ------------------------------------------------------ sleep timer
+
+    /** Arms (minutes > 0) or cancels (minutes <= 0) the sleep timer. */
+    private fun applySleepTimer(minutes: Int) {
+        if (minutes <= 0) {
+            state.sleepTimerEndAtMs = 0L
+            state.sleepMinutesLeft = 0
+        } else {
+            state.sleepTimerEndAtMs = System.currentTimeMillis() + minutes * 60_000L
+            state.sleepMinutesLeft = minutes
+        }
+    }
+
+    /**
+     * Ticker hook: refreshes the remaining-minutes display and, at the
+     * deadline, pauses whichever player is active and says so. The
+     * deadline lives in state, so it survives track changes; the ticker
+     * dies with the Activity, which cancels the timer with the page.
+     */
+    private fun checkSleepTimer() {
+        val endAt = state.sleepTimerEndAtMs
+        if (endAt <= 0L) return
+        val remainingMs = endAt - System.currentTimeMillis()
+        if (remainingMs > 0L) {
+            state.sleepMinutesLeft = ((remainingMs + 59_999L) / 60_000L).toInt()
+            return
+        }
+        state.sleepTimerEndAtMs = 0L
+        state.sleepMinutesLeft = 0
+        try {
+            activePlayer()?.pause()
+        } catch (t: Throwable) {
+            // the deadline still counts as fired
+        }
+        Toast.makeText(this, R.string.music_sleep_fired, Toast.LENGTH_LONG).show()
+    }
+
+    private fun togglePlay() {
+        val target = activePlayer() ?: return
+        if (target.isPlaying) {
+            target.pause()
+        } else {
+            target.play()
         }
     }
 
@@ -375,7 +900,7 @@ class LxMusicPlayerActivity : BaseActivity() {
         val mode = state.loopMode.next()
         state.loopMode = mode
         KV.put(KV_LOOP_MODE, mode.name)
-        player?.repeatMode = if (mode == LxLoopMode.SINGLE) {
+        activePlayer()?.repeatMode = if (mode == LxLoopMode.SINGLE) {
             Player.REPEAT_MODE_ONE
         } else {
             Player.REPEAT_MODE_OFF
@@ -662,6 +1187,30 @@ class LxMusicPlayerActivity : BaseActivity() {
     }
 
     /**
+     * The audio session the EQ should attach to. Local mode reads the
+     * ExoPlayer's own id; service mode uses the id fetched from the
+     * playback service by custom command (kicking the fetch off when
+     * it is still unknown and reporting 0 until it lands, so
+     * [ensureEffects] simply retries on the next callback). AudioFX
+     * sessions are system-wide, so effects created here in the Activity
+     * process do process the service player's output.
+     */
+    private fun currentAudioSessionId(): Int {
+        if (playbackMode == PlaybackMode.SERVICE) {
+            if (serviceSessionId <= 0) {
+                fetchServiceSessionId()
+            }
+            return serviceSessionId
+        }
+        val exo = player ?: return 0
+        return try {
+            exo.audioSessionId
+        } catch (t: Throwable) {
+            0
+        }
+    }
+
+    /**
      * Creates the AudioFX effects for the player's current audio session
      * when they are missing or the session changed, then applies the
      * persisted EQ mode. The session id is only assigned once the player
@@ -671,12 +1220,7 @@ class LxMusicPlayerActivity : BaseActivity() {
      * effects.
      */
     private fun ensureEffects() {
-        val exo = player ?: return
-        val sessionId = try {
-            exo.audioSessionId
-        } catch (t: Throwable) {
-            0
-        }
+        val sessionId = currentAudioSessionId()
         if (sessionId <= 0) return
         if (sessionId != effectsSessionId) {
             releaseEffects()
@@ -871,7 +1415,43 @@ class LxMusicPlayerActivity : BaseActivity() {
         lyricJob?.cancel()
         colorJob?.cancel()
         downloadJob?.cancel()
+        connectJob?.cancel()
+        attachJob?.cancel()
+        sessionIdFetchJob?.cancel()
+        // Mini bar bookkeeping: unregister this instance's local
+        // controls, and clear the record when it was local-backed —
+        // local playback dies with this page. A service-backed record
+        // stays: the service keeps playing and maintains it.
+        if (NowPlayingState.localControls === localControlsImpl) {
+            NowPlayingState.localControls = null
+        }
+        val npInfo = NowPlayingState.current()
+        if (npInfo != null && !npInfo.serviceBacked) {
+            NowPlayingState.clear()
+        }
+        // The sleep timer is bound to this page: the ticker that fires
+        // it is gone, so the deadline can never trigger after destroy.
+        state.sleepTimerEndAtMs = 0L
+        state.sleepMinutesLeft = 0
         releaseEffects()
+        // Release only the controller handle: the service (and its
+        // playback) outlives the page, which is the point of the
+        // service mode. The local player is ours and is released.
+        val mc = controller
+        controller = null
+        if (mc != null) {
+            try {
+                mc.release()
+            } catch (t: Throwable) {
+                // already gone
+            }
+        }
+        try {
+            controllerFuture?.cancel(true)
+        } catch (t: Throwable) {
+            // already done or released above
+        }
+        controllerFuture = null
         player?.release()
         player = null
         super.onDestroy()

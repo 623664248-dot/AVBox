@@ -685,3 +685,185 @@ Python 引擎。
   后续调用可继续排队进入，不会因一次超时永久堵死。
 - 其余沿用 v1.13.0：py 歌曲无歌词；parse 型与 proxy:// 地址
   不支持；py 运行时与视频侧共用。
+
+## v1.13.2 音乐页顶部布局：搜索行置顶 + 动态音符
+
+按真机截图反馈调整音乐页顶部（只动 ui/page/MusicPage.kt）：
+
+- 搜索行置顶：页面第一行改为 [动态音符] [搜索框] [外观设置]。
+  搜索框由原来藏在 JS 搜索模式内容区 / PySpiderContent 内部挪到
+  顶行，JS 与 py 模式共用；查询状态（页面 rememberSaveable 的
+  query）、IME 搜索动作、自绘胶囊样式（MusicSearchField 本体）
+  全部不变，只是换了所在的行。搜索目标按模式分发：py 模式走
+  vm.pySearch；JS 模式若当前不在搜索模式，先 selectMode(SEARCH)
+  再 vm.search，保证结果可见（vm.search 本身不切模式，原先搜索
+  框只在搜索模式内出现、不存在这个问题）。
+- 动态音符：搜索框左侧放 24dp 音符图标（复用 res/drawable/
+  ic_tab_music 的矢量图形，tint 用主题 primary），不用 emoji
+  文本。用 rememberInfiniteTransition 做轻柔循环动画（与
+  ui/components/Skeleton.kt 的 shimmer 同一套 Compose 动画
+  API）：上下浮动 ±3dp + 旋转 ±8°，600ms 单程、Reverse 往返，
+  全周期 1.2s，经 graphicsLayer 应用，只作用于这一个小图标。
+- 外观按钮归位：调色板按钮从模式行右端（py 模式下是单独一行
+  靠右）移到顶行搜索框后面，点击仍打开既有外观 Sheet
+  （showEqSection=false，内容不变）。模式行在 py 模式下整行
+  不再渲染（原来只剩调色板时才出现），JS 模式下只剩三个模式
+  chip。
+- 其余不动：平台/分类 chips 行顺延为第二行（补 top 8dp 间距），
+  模式行为第三行；音源悬浮按钮、自定义背景图（含搜索框既有
+  的半透明处理）逻辑不变；JS 搜索内容区去掉内嵌搜索框后结果
+  Box 直接占满内容区；PySpiderContent 去掉搜索框与对应参数，
+  「返回分类」行保留（顶部间距 4dp→8dp）。
+
+## v1.13.3 py 歌词匹配 + 定时关闭 + 后台播放（服务优先/本地兜底）
+
+本版含 v1.13.2 的音乐页顶行布局（未单独发版），并在此之上做三件事。
+
+### py 歌曲歌词匹配（music/LyricMatcher.kt，新增）
+
+- py 歌曲不再直接放弃歌词：playAt 的歌词协程与原生歌曲统一——原生
+  走 MusicApi.lyric(本平台)，py 走 LyricMatcher.matchLyric，拿到
+  LRC 后同一条 MusicLrc.parse → state.lyricLines 展示路径。播放
+  先行、歌词后到自动刷新，匹配失败保持「暂无歌词」，全程不阻塞
+  播放（铁律）。
+- 匹配策略：先网易（wy）后 QQ（tx），全部复用 MusicApi.search /
+  MusicApi.lyric，不另写 HTTP。搜索关键词 = 清洗后的歌名 + 第一
+  歌手。
+- 歌名清洗（titleCandidates，按可信度排序、最多 3 个）：
+  ①《》内标题（"周深《小美满》"→"小美满"）；②" - "拆分后非歌手
+  侧（歌手侧判定：含 / 或 、，或与清洗后的歌手 token 互为包含）；
+  ③另一侧；④去括号的整名。
+- 歌手清洗（cleanSingers）：按 /、,，&;；与空白切分，剥尾部垃圾
+  后缀（歌曲/音乐/合集/专辑/精选，如"周深歌曲"→"周深"），去重。
+- 挑选规则（pickMatch）：候选名与目标名归一化（小写、去空白与
+  标点）后必须全等，或去尾部括号标签（"（Live）"等）后全等；
+  同名候选里优先歌手有交集的；无歌手信息时接受纯歌名命中。宁可
+  无词，不配错词。
+
+### 定时关闭
+
+- 播放页顶栏在调色板按钮旁新增时钟按钮（ic_sleep_timer），点击
+  用既有 AVBoxOptionSheet 选：取消定时 / 15 / 30 / 45 / 60 分钟。
+- 状态进 LxPlayerState：sleepTimerEndAtMs（墙钟截止，0=关）+
+  sleepMinutesLeft（剩余整分钟）。Screen 只渲染：定时中顶栏按钮
+  变主题色、按钮旁小字显示「还剩 N 分钟」，Sheet 标题也带剩余
+  时间。
+- 执行点在 Activity 既有 400ms ticker 里（checkSleepTimer）：到点
+  对当前生效的 Player（服务 controller 或本地 ExoPlayer）调用
+  pause 并 toast「定时时间到，已暂停播放」。截止时间存在 state
+  里，跨切歌保持；播放页销毁时 ticker 取消，定时随之取消。
+
+### 后台播放重做（双模式 + 降级兜底）
+
+- LxPlaybackService 重写并重新注册（Manifest：foregroundServiceType
+  ="mediaPlayback"，exported=true + MediaSessionService intent-
+  filter，即 v1.9.2 摘掉的那段按 media3 规范形式恢复）。服务持有
+  ExoPlayer + MediaSession（setCallback + setSessionActivity），
+  MediaSessionService 默认通知（DefaultMediaNotification.Provider）
+  展示 MediaItem 元数据里的标题/歌手/封面，通知栏/锁屏只有
+  播放/暂停（队列在 Activity 侧单曲交接，不做上下首）。通知点击
+  经 session activity 回到播放页（用 ComponentName 全限定名指向
+  播放器 Activity，music 包不 import ui.*，不新增包级循环）。
+- Activity 改为「服务优先 + 本地兜底」：init 时并行发起
+  MediaController 连接（buildAsync，3s 超时）；第一次 startPlayback
+  等待连接结果（≤3.5s）后锁定本会话模式（SERVICE/LOCAL）。连接
+  失败/超时、或后续发现 controller 已断开（isConnected 检查）、
+  或 controller 调用抛异常 → degradeToLocal：释放 controller、
+  本会话不再重试，之后全部走 v1.13.1 的本地播放器路径。整个连接
+  与启动过程 try/catch 包裹，任何异常只降级不崩溃——最差情况等
+  于 v1.13.1 现状。
+- 队列/循环/随机/顺序/上下首/进度/seek/下载逻辑全部改走 Player
+  接口（controller 本身即 Player）：playerListener 抽为共享监听
+  同时挂本地与 controller（只有锁定目标有媒体，空闲侧不发事件）；
+  ticker 读 activePlayer()；循环模式在连接建立与模式锁定时各同步
+  一次 repeatMode。MediaItem 改为带 MediaMetadata（标题/歌手/
+  专辑/封面 Uri）构建，本地模式行为不变。
+- header 传递（服务侧）：MediaItem 不带 HTTP header，改用自定义
+  SessionCommand「…music.SET_HEADERS」：Activity 在 setMediaItem
+  前把当前曲 headers（键名列表 + "hv:<键>" 值）推给服务，服务
+  写入自己那份 DefaultHttpDataSource.Factory 的默认请求属性
+  （与本地模式 v1.13.0 的办法等价）；推送有 2s 超时、失败不阻塞
+  播放。
+- EQ 两种模式行为：本地模式与旧版一致（exo.audioSessionId 直
+  接建 AudioFX）。服务模式下 MediaController 不给 session id，
+  改用自定义命令「…music.GET_AUDIO_SESSION_ID」向服务取
+  （SessionResult.extras 回传），取到后照常建 AudioFX——音频会话
+  是系统级的，Activity 进程建的效果器作用于服务播放器的输出；
+  取不到（命令失败/超时）时 EQ 在服务模式下静默不生效，外观
+  Sheet 照常打开，播放不受影响。session id 在服务播放器 lifetime
+  内稳定，切歌不重取（id 变化时 ensureEffects 仍会重建效果器）。
+- 通知点开恢复：start()/init() 把队列 JSON 与当前 index 记在
+  companion 进程内记忆里；无队列 extra 的启动（通知点开且旧实例
+  已销毁）按记忆恢复队列与当前曲，不再直接 finish。
+- 崩溃留痕：music/MusicCrashLog.kt 给播放器 Activity 与播放服务
+  所在进程装默认未捕获异常处理器，把堆栈追加写到
+  filesDir/music_crash.log（>256KB 时重建）后委托原处理器，不吞
+  异常、不改默认行为；同进程只装一次。
+
+### 音乐页迷你播放条
+
+- 进程级共享状态 music/NowPlayingState.kt（StateFlow，只读投影）：
+  一条 Info 记录（trackKey/标题/歌手/封面/来源名/isPlaying/canNext/
+  serviceBacked/队列 JSON/队列 index）。三个写者：播放器 Activity
+  在 startPlayback 交接前发布完整记录并由其播放监听同步 isPlaying；
+  LxPlaybackService 的 player 监听维护它（转曲时按 MediaItem 元
+  数据重发、保留队列/来源名/canNext 等富集字段，isPlaying 只翻
+  serviceBacked 的记录，服务 onDestroy 时清掉自己那条）；迷你条
+  自己在服务模式切歌成功时重发。
+- MediaItem 统一由 NowPlayingState.mediaItemFor 构建：mediaId =
+  歌曲 key（与 LxFavorites.keyOf 同公式），附标题/歌手/封面元
+  数据。播放器页与迷你条共用。
+- 显示条件：MusicPage 订阅 StateFlow，有记录才显示；服务模式还
+  要求页面自己的轻量 MediaController 连上同一 session（连接
+  try/catch、失败静默——连不上就不显示，绝不影响音乐页）；本地
+  模式有记录即显示。位置在内容区底部、底部导航之上（内容 Box
+  在小条可见时补 64dp 底部 padding，列表不被遮挡）；音源 FAB
+  逻辑与位置不动，小条在其下层。
+- 按钮：播放/暂停与关闭走页面 controller（服务模式）或
+  NowPlayingState.localControls（本地模式，由 Activity 在锁定
+  LOCAL 时注册、销毁时注销）；下一首服务模式由页面侧完成——按
+  KV 里的循环模式算下一 index（与播放器页规则一致：顺序模式到
+  队尾不可进、随机模式避开当前曲），用与播放器页相同的
+  LxBridge/PyMusicBridge 解析 + SET_HEADERS 自定义命令 + 发布新
+  记录 + setMediaItem，解析失败只 toast、当前歌曲继续播。关闭 =
+  controller.stop()（本地模式走 localControls.stop）+ 清空共享
+  记录 + 页面 controller 随记录消失自动断开。
+- 点条身回播放页（附着）：LxMusicPlayerActivity.startAttached 只
+  带 EXTRA_ATTACH，不带队列、不覆盖进程内记住的队列。init 恢复
+  记住的队列后由 tryAttach 判断：共享记录存在、serviceBacked、
+  且其 trackKey 能在队列里找到，才走附着——页面按该曲目布置
+  （歌词/封面色/收藏照常加载），bindAttachedSession 等连接锁定
+  SERVICE 后再核对 controller 当前 MediaItem 的 mediaId 与记录
+  key 一致才真正绑定（进度/时长由既有 ticker 读 controller，
+  播放状态直接采信 controller），不一致或连不上就回退普通
+  playAt 重播，绝不出现假绑定黑页。本地模式记录不附着（点条身
+  按普通启动走记住队列重播，与通知点击行为一致）。
+- 本地模式的行为差异：本地播放只存在于播放器页存活期间，记录
+  随页面销毁清除，所以小条在本地模式下实际只在「页面未销毁但
+  不在前台」的边缘场景可用；服务模式才是小条的主路径。
+
+### API 依据（media3 1.11.1 官方 sources jar 逐项核对）
+
+- MediaController.buildAsync / isConnected / sendCustomCommand
+  （返回 ListenableFuture<SessionResult>）、MediaSession.Builder
+  .setCallback / setSessionActivity、MediaSession.Callback
+  .onCustomCommand(session, controller, customCommand, args)、
+  SessionCommand(String, Bundle).customAction、SessionResult
+  .RESULT_SUCCESS / RESULT_ERROR_NOT_SUPPORTED / extras 字段、
+  MediaSessionService 经 onGetSession 返回的会话由框架自动
+  addSession 并挂默认通知管理（DefaultMediaNotificationProvider）
+  ——均在 1.11.1 sources 中确认存在。media3-session 依赖
+  app/build.gradle.kts 本就在（libs.media3.session），未动。
+
+### 已知限制
+
+- 通知栏/锁屏只有播放/暂停，没有上一首/下一首（队列仍是
+  Activity 侧单曲交接，与 v1.9.0 的限制相同）。
+- 服务模式下若服务连接在会话中途死亡（同进程，实际只可能随
+  整个 App 进程死亡发生），下一次点歌/切歌时降级本地播放器，
+  当前曲不会自动续播，需用户再点一次播放。
+- EQ 在服务模式依赖自定义命令回传 session id；个别设备命令
+  往返失败时 EQ 静默失效（见上）。
+- py 歌词匹配依赖平台搜索可用性与歌名清洗质量：同名不同曲、
+  爬虫歌名严重变形时可能匹配不到（保持无歌词）或极少数配错，
+  挑选规则已按「宁缺勿错」收紧。

@@ -92,6 +92,16 @@ class LxPlayerState {
      */
     var bgColor by mutableStateOf<Color?>(null)
 
+    /**
+     * Sleep timer deadline as a wall-clock timestamp (ms); 0 = off.
+     * Owned by the Activity: set from the sleep sheet, counted down by
+     * its ticker, survives track changes, dies with the player page.
+     */
+    var sleepTimerEndAtMs by mutableLongStateOf(0L)
+
+    /** Whole minutes left on the sleep timer, refreshed by the ticker. */
+    var sleepMinutesLeft by mutableIntStateOf(0)
+
     var downloadStatus by mutableStateOf(LxDownloadStatus.IDLE)
 
     /** 0..100 while downloading; -1 when the total size is unknown. */
