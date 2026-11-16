@@ -64,8 +64,18 @@ class LxMusicPlayerActivity : BaseActivity() {
         /** KV key for the persisted loop mode (LxLoopMode name). */
         private const val KV_LOOP_MODE = "lx_loop_mode"
 
-        /** AudioFX strength scale is 0..1000; 700 is a clearly audible boost. */
-        private const val EQ_EFFECT_STRENGTH: Short = 700
+        /** AudioFX strength scale is 0..1000; v1.12.0 uses the maximum. */
+        private const val EQ_EFFECT_STRENGTH: Short = 1000
+
+        /**
+         * Anchor weights (-1..1) of the built-in EQ curves, defined at 5
+         * points and linearly interpolated onto the device's band count.
+         * A weight is multiplied by the positive end of the equalizer's
+         * band level range, so 1.0 means "this band fully up".
+         */
+        private val CURVE_BASS_ANCHORS = floatArrayOf(1.0f, 0.75f, 0.25f, -0.1f, -0.25f)
+        private val CURVE_VOCAL_ANCHORS = floatArrayOf(-0.35f, 0.25f, 1.0f, 0.7f, 0.0f)
+        private val CURVE_BRIGHT_ANCHORS = floatArrayOf(-0.25f, -0.05f, 0.2f, 0.65f, 1.0f)
 
         fun start(context: Context, queueJson: String, index: Int) {
             context.startActivity(
@@ -126,6 +136,10 @@ class LxMusicPlayerActivity : BaseActivity() {
                             playAt(i)
                         },
                         onEqModeSelected = { ensureEffects() },
+                        onEqCustomLevelsChanged = { levels ->
+                            state.eqCustomLevels = levels
+                            ensureEffects()
+                        },
                         onToggleLoopMode = { toggleLoopMode() },
                         onToggleFavorite = { toggleFavorite() },
                         onDownload = { downloadCurrent() },
@@ -564,6 +578,13 @@ class LxMusicPlayerActivity : BaseActivity() {
                         getString(R.string.music_eq_preset_name, index + 1)
                     }
                 }
+                // Publish the band layout for the appearance sheet's
+                // custom EQ sliders, plus the persisted custom levels.
+                val bandRange = eq.bandLevelRange
+                state.eqBandCount = eq.numberOfBands.toInt()
+                state.eqBandMinMb = bandRange[0].toInt()
+                state.eqBandMaxMb = bandRange[1].toInt()
+                state.eqCustomLevels = MusicAppearance.readEqCustomLevels()
             } catch (t: Throwable) {
                 equalizer = null
             }
@@ -614,6 +635,10 @@ class LxMusicPlayerActivity : BaseActivity() {
                     }
                 }
 
+                mode == MusicAppearance.EQ_CUSTOM -> applyCustomLevels()
+
+                mode.startsWith(MusicAppearance.EQ_CURVE_PREFIX) -> applyAnchorCurve(mode)
+
                 else -> {
                     val presetIndex = MusicAppearance.eqPresetIndex(mode)
                     val eq = equalizer
@@ -627,6 +652,82 @@ class LxMusicPlayerActivity : BaseActivity() {
             }
         } catch (t: Throwable) {
             // audiofx rejected the change: stay silent, playback continues.
+        }
+    }
+
+    /** Applies one of the built-in anchor curves (curve:bass/vocal/bright). */
+    private fun applyAnchorCurve(mode: String) {
+        val eq = equalizer ?: return
+        val anchors = when (mode) {
+            MusicAppearance.EQ_CURVE_BASS -> CURVE_BASS_ANCHORS
+            MusicAppearance.EQ_CURVE_VOCAL -> CURVE_VOCAL_ANCHORS
+            MusicAppearance.EQ_CURVE_BRIGHT -> CURVE_BRIGHT_ANCHORS
+            else -> return
+        }
+        applyBandWeights(eq, anchors)
+    }
+
+    /**
+     * Interpolates the 5-point [anchors] onto the equalizer's bands and
+     * pushes each level (weight × the range's positive end, clamped to
+     * the band level range). Every band is set in its own try/catch: a
+     * rejected band never blocks the others.
+     */
+    private fun applyBandWeights(eq: Equalizer, anchors: FloatArray) {
+        try {
+            val bandCount = eq.numberOfBands.toInt()
+            if (bandCount <= 0) return
+            val range = eq.bandLevelRange
+            val minMb = range[0].toInt()
+            val maxMb = range[1].toInt()
+            for (band in 0 until bandCount) {
+                val weight = anchorWeight(anchors, band, bandCount)
+                val level = (weight * maxMb).toInt().coerceIn(minMb, maxMb)
+                try {
+                    eq.setBandLevel(band.toShort(), level.toShort())
+                } catch (t: Throwable) {
+                    // keep applying the remaining bands
+                }
+            }
+            eq.enabled = true
+        } catch (t: Throwable) {
+            // no usable equalizer: silent, playback continues.
+        }
+    }
+
+    /** Linear interpolation of the anchor curve at [band] of [bandCount]. */
+    private fun anchorWeight(anchors: FloatArray, band: Int, bandCount: Int): Float {
+        if (anchors.isEmpty()) return 0f
+        if (bandCount <= 1 || anchors.size == 1) return anchors[0]
+        val pos = band.toFloat() * (anchors.size - 1) / (bandCount - 1)
+        val low = pos.toInt().coerceIn(0, anchors.size - 1)
+        val high = (low + 1).coerceAtMost(anchors.size - 1)
+        val frac = pos - low
+        return anchors[low] + (anchors[high] - anchors[low]) * frac
+    }
+
+    /** Applies the user's stored per-band levels (custom EQ mode). */
+    private fun applyCustomLevels() {
+        val eq = equalizer ?: return
+        try {
+            val bandCount = eq.numberOfBands.toInt()
+            if (bandCount <= 0) return
+            val range = eq.bandLevelRange
+            val minMb = range[0].toInt()
+            val maxMb = range[1].toInt()
+            val stored = MusicAppearance.readEqCustomLevels()
+            for (band in 0 until bandCount) {
+                // Bands beyond the stored list stay flat.
+                val level = (stored.getOrNull(band) ?: 0).coerceIn(minMb, maxMb)
+                try {
+                    eq.setBandLevel(band.toShort(), level.toShort())
+                } catch (t: Throwable) {
+                    // keep applying the remaining bands
+                }
+            }
+            eq.enabled = true
+        } catch (t: Throwable) {
+            // no usable equalizer: silent, playback continues.
         }
     }
 

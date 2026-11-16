@@ -492,3 +492,58 @@ lastResolvedQuality()（记录最近一次 getMusicUrl 实际命中的
 - 修复：删掉 allowHardware 调用；拿到 bitmap 后若 config 为
   HARDWARE（API 26+），先 copy 到 ARGB_8888 软件位图再 getPixels
   （copy/Config.HARDWARE/getPixels 均已对 android.jar 核实）。
+
+## v1.12.0 沉浸歌词纯色背景 + 音效加强
+
+### 沉浸歌词背景改纯色 + 点按返回
+
+真机反馈：点歌词进全屏沉浸歌词后，背景是封面图平铺，不想要图；
+在歌词界面点击要能回到播放界面。
+
+- ImmersiveLyrics 背景层去掉封面图与渐变罩，改为纯色：优先
+  LxPlayerState.bgColor（与播放页相同的封面取色），为 null 时用
+  播放页兜底深色 0xFF262833。即使外观里设了自定义背景图，沉浸
+  歌词也只用这个纯色。播放页本身的背景逻辑不动。
+- 点按返回：根容器与歌词列表（LazyColumn，及无歌词时的空态区）
+  都加了无波纹 clickable（新辅助 clickableNoRipple）。歌词文本
+  本身不消费点击，滚动手势会消费掉点按，所以滚动跟随不受影响；
+  上一首 / 播放 / 下一首按钮自己消费点击，不会误退。BackHandler
+  退出保留，退出后播放进度与歌词行不变。
+
+### 音效加强（都在 LxMusicPlayerActivity 的 EQ 体系内）
+
+真机反馈：原 EQ 预设 + BassBoost/Virtualizer 效果不明显。
+
+- BassBoost / Virtualizer 的 strength 从 700 提到最大值 1000。
+- 新增三条内置强曲线（eqMode = curve:bass / curve:vocal /
+  curve:bright）：不用设备预设，直接对 Equalizer 逐 band
+  setBandLevel。曲线以 5 点锚点定义（权重 -1..1，乘以设备
+  bandLevelRange 的正上限并 clamp 到 range 内），按设备实际
+  band 数线性插值；每 band 独立 try/catch。
+  - 重低音 bass：[1.0, 0.75, 0.25, -0.1, -0.25]
+  - 人声 vocal：[-0.35, 0.25, 1.0, 0.7, 0.0]
+  - 明亮 bright：[-0.25, -0.05, 0.2, 0.65, 1.0]
+- 新增「自定义」模式（eqMode = custom）：外观 Sheet 音效区选中
+  自定义后，下方出现逐 band 滑杆（band 数与 mB 范围由 Activity
+  在 ensureEffects 建 Equalizer 时发布到 LxPlayerState 的
+  eqBandCount / eqBandMinMb / eqBandMaxMb，当前值镜像在
+  eqCustomLevels）。滑杆值存 KV `music_eq_custom_levels`（逗号
+  分隔，读取带 "" 默认），拖动即写 KV 并经
+  onEqCustomLevelsChanged 回调 Activity 立即重应用；存储 band
+  数少于设备 band 数时，多余 band 置 0。
+- Sheet 音效区顺序：原声 → 设备预设 → 重低音 → 人声 → 明亮 →
+  低音增强 → 环绕 → 自定义。音乐页的 Sheet 只有背景区，不受
+  影响。
+- Equalizer 创建失败 / 设备不支持 audiofx 时，曲线与自定义
+  静默无效，播放不受影响（沿用全 try/catch 风格）。
+
+### 已知限制
+
+- 沉浸歌词纯色取的是整幅封面平均色压暗值，与播放页一致；封面
+  本身过杂时颜色观感一般，但与播放页保持统一。
+- 曲线与自定义都依赖设备 Equalizer 的 band 数与范围：band 越
+  少曲线越粗略；个别设备 Equalizer 增益上限低（如 ±5dB）时
+  效果仍会弱于软件 DTS，这类设备上 BassBoost（已拉满 1000）
+  通常更明显。
+- 自定义滑杆只在 Equalizer 已建好（开始播放后）时出现；未播放
+  时选自定义不显示滑杆，开始播放后重开 Sheet 即出现。

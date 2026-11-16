@@ -51,6 +51,19 @@ class LxPlayerState {
     /** Device EQ preset names enumerated by the Activity (empty = no audiofx). */
     var eqPresets by mutableStateOf<List<String>>(emptyList())
 
+    /** Equalizer band count published by the Activity (0 = no equalizer). */
+    var eqBandCount by mutableIntStateOf(0)
+
+    /** Equalizer band level range in millibels, published by the Activity. */
+    var eqBandMinMb by mutableIntStateOf(0)
+    var eqBandMaxMb by mutableIntStateOf(0)
+
+    /**
+     * Per-band levels (millibels) of the "custom" EQ mode, mirrored here
+     * for the appearance sheet sliders; persisted in KV by MusicAppearance.
+     */
+    var eqCustomLevels by mutableStateOf<List<Int>>(emptyList())
+
     /** Queue advance behaviour; persisted by the Activity in KV. */
     var loopMode by mutableStateOf(LxLoopMode.LIST)
 

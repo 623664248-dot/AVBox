@@ -62,6 +62,7 @@ object MusicAppearance {
     private const val KEY_BLUR_DP = "music_bg_blur_dp"
     private const val KEY_SCRIM_PERCENT = "music_bg_scrim_percent"
     private const val KEY_EQ_MODE = "music_eq_mode"
+    private const val KEY_EQ_CUSTOM_LEVELS = "music_eq_custom_levels"
 
     private const val BG_DIR_NAME = "music_bg"
 
@@ -69,6 +70,15 @@ object MusicAppearance {
     const val EQ_BASS = "bass"
     const val EQ_SURROUND = "surround"
     const val EQ_PRESET_PREFIX = "preset:"
+
+    /** Built-in strong EQ curves, applied band-by-band by the player. */
+    const val EQ_CURVE_BASS = "curve:bass"
+    const val EQ_CURVE_VOCAL = "curve:vocal"
+    const val EQ_CURVE_BRIGHT = "curve:bright"
+    const val EQ_CURVE_PREFIX = "curve:"
+
+    /** User-tuned per-band levels, stored under [KEY_EQ_CUSTOM_LEVELS]. */
+    const val EQ_CUSTOM = "custom"
 
     const val DEFAULT_BLUR_DP = 18
     const val DEFAULT_SCRIM_PERCENT = 55
@@ -116,6 +126,20 @@ object MusicAppearance {
     fun updateEqMode(mode: String) {
         eqMode = mode
         KV.put(KEY_EQ_MODE, mode)
+    }
+
+    /**
+     * Per-band levels (millibels) of the custom EQ mode, comma-separated
+     * in KV. Empty when never tuned; callers treat missing bands as 0.
+     */
+    fun readEqCustomLevels(): List<Int> {
+        val raw: String = KV.get(KEY_EQ_CUSTOM_LEVELS, "")
+        if (raw.isBlank()) return emptyList()
+        return raw.split(",").map { it.trim().toIntOrNull() ?: 0 }
+    }
+
+    fun updateEqCustomLevels(levels: List<Int>) {
+        KV.put(KEY_EQ_CUSTOM_LEVELS, levels.joinToString(","))
     }
 
     fun eqModeForPreset(index: Int): String = EQ_PRESET_PREFIX + index
@@ -209,6 +233,11 @@ fun MusicAppearanceSheet(
     showEqSection: Boolean = false,
     eqPresets: List<String> = emptyList(),
     onEqModeSelected: (String) -> Unit = {},
+    eqBandCount: Int = 0,
+    eqBandMinMb: Int = 0,
+    eqBandMaxMb: Int = 0,
+    eqCustomLevels: List<Int> = emptyList(),
+    onEqCustomLevelsChanged: (List<Int>) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -306,6 +335,21 @@ fun MusicAppearanceSheet(
                     )
                 }
                 EqOptionRow(
+                    label = stringResource(R.string.music_eq_curve_bass),
+                    selected = currentMode == MusicAppearance.EQ_CURVE_BASS,
+                    onClick = { selectEq(MusicAppearance.EQ_CURVE_BASS, onEqModeSelected) },
+                )
+                EqOptionRow(
+                    label = stringResource(R.string.music_eq_curve_vocal),
+                    selected = currentMode == MusicAppearance.EQ_CURVE_VOCAL,
+                    onClick = { selectEq(MusicAppearance.EQ_CURVE_VOCAL, onEqModeSelected) },
+                )
+                EqOptionRow(
+                    label = stringResource(R.string.music_eq_curve_bright),
+                    selected = currentMode == MusicAppearance.EQ_CURVE_BRIGHT,
+                    onClick = { selectEq(MusicAppearance.EQ_CURVE_BRIGHT, onEqModeSelected) },
+                )
+                EqOptionRow(
                     label = stringResource(R.string.music_eq_bass),
                     selected = currentMode == MusicAppearance.EQ_BASS,
                     onClick = { selectEq(MusicAppearance.EQ_BASS, onEqModeSelected) },
@@ -315,6 +359,45 @@ fun MusicAppearanceSheet(
                     selected = currentMode == MusicAppearance.EQ_SURROUND,
                     onClick = { selectEq(MusicAppearance.EQ_SURROUND, onEqModeSelected) },
                 )
+                EqOptionRow(
+                    label = stringResource(R.string.music_eq_custom),
+                    selected = currentMode == MusicAppearance.EQ_CUSTOM,
+                    onClick = { selectEq(MusicAppearance.EQ_CUSTOM, onEqModeSelected) },
+                )
+                if (currentMode == MusicAppearance.EQ_CUSTOM && eqBandCount > 0) {
+                    // Per-band sliders for the custom curve. Dragging a
+                    // slider persists the levels and re-applies them to
+                    // the playing player through the callback right away.
+                    for (band in 0 until eqBandCount) {
+                        val levelMb = eqCustomLevels.getOrElse(band) { 0 }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Slider(
+                                value = levelMb.toFloat(),
+                                onValueChange = { value ->
+                                    val updated = (0 until eqBandCount).map { i ->
+                                        if (i == band) {
+                                            value.roundToInt()
+                                        } else {
+                                            eqCustomLevels.getOrElse(i) { 0 }
+                                        }
+                                    }
+                                    MusicAppearance.updateEqCustomLevels(updated)
+                                    onEqCustomLevelsChanged(updated)
+                                },
+                                valueRange = eqBandMinMb.toFloat()..eqBandMaxMb.toFloat(),
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = formatEqDb(levelMb),
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -323,6 +406,13 @@ fun MusicAppearanceSheet(
 private fun selectEq(mode: String, onEqModeSelected: (String) -> Unit) {
     MusicAppearance.updateEqMode(mode)
     onEqModeSelected(mode)
+}
+
+/** Millibels as a signed dB label for the custom EQ sliders ("+3.0 dB"). */
+private fun formatEqDb(levelMb: Int): String {
+    val db = levelMb / 100f
+    val sign = if (db > 0f) "+" else ""
+    return sign + String.format(java.util.Locale.US, "%.1f", db) + " dB"
 }
 
 @Composable

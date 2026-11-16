@@ -251,6 +251,10 @@
     <string name="music_eq_off">原聲</string>
     <string name="music_eq_bass">低音增強</string>
     <string name="music_eq_surround">環繞</string>
+    <string name="music_eq_curve_bass">重低音</string>
+    <string name="music_eq_curve_vocal">人聲</string>
+    <string name="music_eq_curve_bright">明亮</string>
+    <string name="music_eq_custom">自定義</string>
     <string name="music_eq_preset_name">預設 %1$d</string>
     <string name="music_mode_shuffle">隨機播放</string>
     <string name="music_favorites_title">我的收藏</string>

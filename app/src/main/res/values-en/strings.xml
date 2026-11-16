@@ -251,6 +251,10 @@
     <string name="music_eq_off">Original</string>
     <string name="music_eq_bass">Bass boost</string>
     <string name="music_eq_surround">Surround</string>
+    <string name="music_eq_curve_bass">Heavy bass</string>
+    <string name="music_eq_curve_vocal">Vocal</string>
+    <string name="music_eq_curve_bright">Bright</string>
+    <string name="music_eq_custom">Custom</string>
     <string name="music_eq_preset_name">Preset %1$d</string>
     <string name="music_mode_shuffle">Shuffle</string>
     <string name="music_favorites_title">My favourites</string>

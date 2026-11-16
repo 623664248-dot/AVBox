@@ -8,6 +8,7 @@ package com.github.avbox.osc.ui.music
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -75,6 +76,7 @@ fun LxMusicPlayerScreen(
     onToggleQueue: () -> Unit,
     onSelectQueueItem: (Int) -> Unit,
     onEqModeSelected: (String) -> Unit = {},
+    onEqCustomLevelsChanged: (List<Int>) -> Unit = {},
     onToggleLoopMode: () -> Unit = {},
     onToggleFavorite: () -> Unit = {},
     onDownload: () -> Unit = {},
@@ -390,6 +392,11 @@ fun LxMusicPlayerScreen(
             showEqSection = true,
             eqPresets = state.eqPresets,
             onEqModeSelected = onEqModeSelected,
+            eqBandCount = state.eqBandCount,
+            eqBandMinMb = state.eqBandMinMb,
+            eqBandMaxMb = state.eqBandMaxMb,
+            eqCustomLevels = state.eqCustomLevels,
+            onEqCustomLevelsChanged = onEqCustomLevelsChanged,
         )
     }
 
@@ -581,8 +588,9 @@ private fun ProgressRow(
 }
 
 /**
- * Immersive mode: the cover fills the whole screen as the background under a
- * dark gradient, lyrics render large and centered on top. Tapping anywhere
+ * Immersive mode: lyrics render large and centered over a solid background
+ * in the same cover-sampled colour as the player page (never the cover
+ * image itself, and never a custom background image). Tapping anywhere
  * outside the controls (or the system back key, handled by the caller)
  * exits back to the normal layout. Controls stay minimal: prev/play/next.
  */
@@ -595,33 +603,12 @@ private fun ImmersiveLyrics(
     onPrev: () -> Unit,
 ) {
     val track = state.current
-    Box(modifier = Modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clickable { onExit() },
-        ) {
-            if (track?.img != null) {
-                AsyncImage(
-                    model = track.img,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color.Black.copy(alpha = 0.45f),
-                                Color.Black.copy(alpha = 0.78f),
-                            ),
-                        ),
-                    ),
-            )
-        }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(state.bgColor ?: FallbackBgColor)
+            .clickableNoRipple { onExit() },
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -657,7 +644,11 @@ private fun ImmersiveLyrics(
                     CircularProgressIndicator(color = Color.White)
                 }
             }
-            ImmersiveLyricList(state = state, modifier = Modifier.weight(1f))
+            ImmersiveLyricList(
+                state = state,
+                onExit = onExit,
+                modifier = Modifier.weight(1f),
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
@@ -696,11 +687,36 @@ private fun ImmersiveLyrics(
     }
 }
 
+/**
+ * Tap target without the default ripple, for the immersive lyrics'
+ * tap-anywhere-to-exit areas. The tap only fires when the gesture is not
+ * consumed elsewhere, so scrolling the lyric list and pressing the
+ * transport buttons keep working.
+ */
+@Composable
+private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier {
+    val interactionSource = remember { MutableInteractionSource() }
+    return clickable(
+        interactionSource = interactionSource,
+        indication = null,
+        onClick = onClick,
+    )
+}
+
 /** Same lyric data/parser as the normal layout, just larger and on-dark. */
 @Composable
-private fun ImmersiveLyricList(state: LxPlayerState, modifier: Modifier = Modifier) {
+private fun ImmersiveLyricList(
+    state: LxPlayerState,
+    onExit: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
     if (state.lyricLines.isEmpty()) {
-        Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .clickableNoRipple { onExit() },
+            contentAlignment = Alignment.Center,
+        ) {
             Text(
                 text = stringResource(R.string.music_no_lyric),
                 style = MaterialTheme.typography.bodyLarge,
@@ -720,7 +736,9 @@ private fun ImmersiveLyricList(state: LxPlayerState, modifier: Modifier = Modifi
     }
     LazyColumn(
         state = listState,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .clickableNoRipple { onExit() },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 24.dp),
