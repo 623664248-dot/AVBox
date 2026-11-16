@@ -237,6 +237,9 @@
     <string name="music_source_import_failed">Source import failed: %1$s</string>
     <string name="music_source_delete">Delete source</string>
     <string name="music_source_deleted">Source deleted</string>
+    <string name="music_tab_search">Search</string>
+    <string name="music_tab_charts">Charts</string>
+    <string name="music_charts_empty">No charts available</string>
     <string name="tab_mine">Me</string>
     <string name="weekday_mon">Mon</string>
     <string name="weekday_tue">Tue</string>

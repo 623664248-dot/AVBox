@@ -158,3 +158,49 @@ name/singer/albumName/interval(mm:ss)/img/types/typeUrl 等洛雪标准字段。
 - 限制：同名同版本重复导入会生成新条目（不去重）；脚本文件只从本地
   导入，不支持 URL 在线导入；导入的脚本与内置脚本一样在 QuickJS 里
   运行，其联网行为不受 app 额外限制（与洛雪自定义源一致，风险自担）。
+
+## v1.8.0 分平台排行榜
+
+- 音乐页在搜索行下方新增 [搜索 | 排行榜] 分段切换；排行榜模式下平台
+  chips 与搜索模式共用同一套（酷狗/酷我/QQ音乐/网易云），切平台即
+  加载该平台榜单。榜单以「封面+榜名+更新提示」列表呈现，点榜单进入
+  歌曲列表（复用搜索结果的歌曲行），点歌曲走现有播放器、队列=该榜
+  歌曲；顶部返回键和系统返回键都从歌曲列表回榜单列表。状态全部在
+  MusicViewModel（mode/charts/chartSongs/selectedChart 及两个
+  loading），页面只渲染。
+- 数据层：MusicApi 新增 charts(source) / chartSongs(source, id, page)
+  与 MusicChart(id/name/cover/updateTip)；榜单歌曲一律取第一页
+  50 首，不做分页加载。各平台端点与沙盒实测（原始条数→解析条数）：
+  - 酷狗 kg：榜单 GET mobilecdn.kugou.com/api/v3/rank/list
+    （data.info，25→25；rankid/rankname/imgurl/update_frequency）；
+    歌曲 GET /api/v3/rank/song?rankid=&pagesize=50（单页 50 首，
+    榜总 500）。歌曲字段与搜索同构，解析抽成 parseKgItem 共用；榜单
+    条目无 singername，歌手回退 authors[].author_name → filename
+    前缀。
+  - 网易 wy：榜单 GET music.163.com/api/toplist（list，65→65；
+    id/name/coverImgUrl/updateFrequency）；歌曲 GET
+    /api/playlist/detail?id= 的 result.tracks（100→取前 50）。注意
+    tracks 是老结构（artists/album/duration），与 wy 搜索 songs
+    同构，parseWyItem 共用。沙盒出口本次实测 toplist 与 detail 都
+    返回了明文 JSON；个别出口仍可能拿到加密 {"result":"<hex>"}
+    载荷，解析会安全返回空、页面显示空态。
+  - QQ tx：榜单 GET c.y.qq.com/v8/fcg-bin/fcg_myqq_toplist.fcg
+    （data.topList，25→25；id/topTitle/picUrl，无更新提示字段）；
+    歌曲 GET fcg_v8_toplist_cp.fcg?topid=&type=top 的
+    songlist[].data（300→取前 50），与 tx 搜索 song 结构同构，
+    parseTxItem 共用；榜单条目无 file.media_mid，strMediaMid 缺失
+    时以 songmid 兜底（解析链里 midurlinfo 也纳入回退链）。
+  - 酷我 kw：跳过（切到排行榜模式显示「暂无榜单」空态）。
+    www.kuwo.cn 的 bang 接口对未签名请求一律回
+    {"success":false,"message":"The request is illegal!"}，带
+    kw_token 的 csrf 流程同样被拒；老接口 kbangserver.kuwo.cn
+    没有榜单列表端点，其 content 接口按 bang id 探测时，同一 id
+    在不同请求间返回互相矛盾的榜名（疑似多后端数据不一致），
+    无法可靠建立榜单目录。注：kbangserver 的单榜歌曲接口本身
+    可用（musiclist 单页 50 首，id/name/artist/album/albumid/
+    song_duration 字段完整），待有可靠目录来源再接。
+- 顺带 UI 修复：搜索框改为胶囊形（RoundedCornerShape(50%)、高
+  44dp），与搜索/音源按钮垂直居中；播放器页顶部行（返回键、队列
+  键）加状态栏 inset，不再与状态栏重叠。
+- 已知限制：榜单歌曲只加载第一页 50 首；kw 无榜单；wy 在个别
+  网络出口下可能因加密载荷显示空态，需真机再验。

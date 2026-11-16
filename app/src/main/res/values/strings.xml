@@ -237,6 +237,9 @@
     <string name="music_source_import_failed">音源导入失败：%1$s</string>
     <string name="music_source_delete">删除音源</string>
     <string name="music_source_deleted">音源已删除</string>
+    <string name="music_tab_search">搜索</string>
+    <string name="music_tab_charts">排行榜</string>
+    <string name="music_charts_empty">暂无榜单</string>
     <string name="tab_mine">我的</string>
     <string name="weekday_mon">周一</string>
     <string name="weekday_tue">周二</string>

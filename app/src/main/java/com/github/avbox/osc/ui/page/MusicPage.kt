@@ -6,6 +6,7 @@
 package com.github.avbox.osc.ui.page
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -63,6 +64,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import com.github.avbox.osc.R
+import com.github.avbox.osc.music.MusicChart
 import com.github.avbox.osc.music.MusicTrack
 import com.github.avbox.osc.ui.components.AVBoxAlertDialog
 import com.github.avbox.osc.ui.music.LxMusicPlayerActivity
@@ -83,6 +85,12 @@ fun MusicPage(
     val searched by vm.searched.collectAsStateWithLifecycle()
     val scriptOptions by vm.scriptOptions.collectAsStateWithLifecycle()
     val scriptBusy by vm.scriptBusy.collectAsStateWithLifecycle()
+    val mode by vm.mode.collectAsStateWithLifecycle()
+    val charts by vm.charts.collectAsStateWithLifecycle()
+    val chartSongs by vm.chartSongs.collectAsStateWithLifecycle()
+    val selectedChart by vm.selectedChart.collectAsStateWithLifecycle()
+    val chartsLoading by vm.chartsLoading.collectAsStateWithLifecycle()
+    val chartSongsLoading by vm.chartSongsLoading.collectAsStateWithLifecycle()
 
     var query by rememberSaveable { mutableStateOf("") }
     var scriptDialogOpen by remember { mutableStateOf(false) }
@@ -116,8 +124,11 @@ fun MusicPage(
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(44.dp),
                 singleLine = true,
+                shape = RoundedCornerShape(percent = 50),
                 placeholder = { Text(stringResource(R.string.music_search_hint)) },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { vm.search(query) }),
@@ -134,6 +145,22 @@ fun MusicPage(
             ) {
                 Text(stringResource(R.string.music_source_switch))
             }
+        }
+
+        Row(
+            modifier = Modifier.padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(
+                selected = mode == MusicMode.SEARCH,
+                onClick = { vm.selectMode(MusicMode.SEARCH) },
+                label = { Text(stringResource(R.string.music_tab_search)) },
+            )
+            FilterChip(
+                selected = mode == MusicMode.CHARTS,
+                onClick = { vm.selectMode(MusicMode.CHARTS) },
+                label = { Text(stringResource(R.string.music_tab_charts)) },
+            )
         }
 
         if (sources.isNotEmpty()) {
@@ -153,8 +180,29 @@ fun MusicPage(
             }
         }
 
+        BackHandler(enabled = mode == MusicMode.CHARTS && selectedChart != null) {
+            vm.closeChart()
+        }
+
         Box(modifier = Modifier.fillMaxSize()) {
-            when {
+            if (mode == MusicMode.CHARTS) {
+                ChartsContent(
+                    charts = charts,
+                    chartSongs = chartSongs,
+                    selectedChart = selectedChart,
+                    chartsLoading = chartsLoading,
+                    chartSongsLoading = chartSongsLoading,
+                    onOpenChart = { vm.openChart(it) },
+                    onCloseChart = { vm.closeChart() },
+                    onPlayChartSong = { index ->
+                        LxMusicPlayerActivity.start(
+                            context,
+                            MusicTrack.listToJson(chartSongs),
+                            index,
+                        )
+                    },
+                )
+            } else when {
                 loading -> {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
@@ -346,6 +394,137 @@ private fun MusicTrackRow(track: MusicTrack, onClick: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+@Composable
+private fun ChartsContent(
+    charts: List<MusicChart>,
+    chartSongs: List<MusicTrack>,
+    selectedChart: MusicChart?,
+    chartsLoading: Boolean,
+    chartSongsLoading: Boolean,
+    onOpenChart: (MusicChart) -> Unit,
+    onCloseChart: () -> Unit,
+    onPlayChartSong: (Int) -> Unit,
+) {
+    when {
+        selectedChart != null -> {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onCloseChart) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_arrow_left),
+                            contentDescription = stringResource(R.string.common_back),
+                        )
+                    }
+                    Text(
+                        text = selectedChart.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Box(modifier = Modifier.fillMaxSize()) {
+                    when {
+                        chartSongsLoading -> {
+                            CircularProgressIndicator(
+                                modifier = Modifier.align(Alignment.Center),
+                            )
+                        }
+
+                        chartSongs.isEmpty() -> {
+                            Text(
+                                text = stringResource(R.string.music_empty_result),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.align(Alignment.Center),
+                            )
+                        }
+
+                        else -> {
+                            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                itemsIndexed(
+                                    chartSongs,
+                                    key = { index, _ -> index },
+                                ) { index, track ->
+                                    MusicTrackRow(
+                                        track = track,
+                                        onClick = { onPlayChartSong(index) },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        chartsLoading -> {
+            Box(modifier = Modifier.fillMaxSize()) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            }
+        }
+
+        charts.isEmpty() -> {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Text(
+                    text = stringResource(R.string.music_charts_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+        }
+
+        else -> {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(charts, key = { it.id }) { chart ->
+                    MusicChartRow(chart = chart, onClick = { onOpenChart(chart) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MusicChartRow(chart: MusicChart, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AsyncImage(
+            model = chart.cover,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(8.dp)),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = chart.name,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (chart.updateTip.isNotEmpty()) {
+                Text(
+                    text = chart.updateTip,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

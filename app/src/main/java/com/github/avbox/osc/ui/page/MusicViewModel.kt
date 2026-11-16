@@ -7,6 +7,7 @@ import com.github.avbox.osc.R
 import com.github.avbox.osc.music.LxBridge
 import com.github.avbox.osc.music.LxUserScripts
 import com.github.avbox.osc.music.MusicApi
+import com.github.avbox.osc.music.MusicChart
 import com.github.avbox.osc.music.MusicTrack
 import com.github.avbox.osc.util.AppContextHolder
 import com.github.avbox.osc.util.KV
@@ -20,6 +21,9 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Music tab content mode: platform search or per-platform charts. */
+enum class MusicMode { SEARCH, CHARTS }
 
 /**
  * Music tab state: owns the LX source bridge lifecycle (built-in scripts
@@ -56,6 +60,24 @@ class MusicViewModel : ViewModel() {
     private val _searched = MutableStateFlow(false)
     val searched: StateFlow<Boolean> = _searched.asStateFlow()
 
+    private val _mode = MutableStateFlow(MusicMode.SEARCH)
+    val mode: StateFlow<MusicMode> = _mode.asStateFlow()
+
+    private val _charts = MutableStateFlow<List<MusicChart>>(emptyList())
+    val charts: StateFlow<List<MusicChart>> = _charts.asStateFlow()
+
+    private val _chartSongs = MutableStateFlow<List<MusicTrack>>(emptyList())
+    val chartSongs: StateFlow<List<MusicTrack>> = _chartSongs.asStateFlow()
+
+    private val _selectedChart = MutableStateFlow<MusicChart?>(null)
+    val selectedChart: StateFlow<MusicChart?> = _selectedChart.asStateFlow()
+
+    private val _chartsLoading = MutableStateFlow(false)
+    val chartsLoading: StateFlow<Boolean> = _chartsLoading.asStateFlow()
+
+    private val _chartSongsLoading = MutableStateFlow(false)
+    val chartSongsLoading: StateFlow<Boolean> = _chartSongsLoading.asStateFlow()
+
     private val _scriptOptions = MutableStateFlow<List<ScriptOption>>(emptyList())
     val scriptOptions: StateFlow<List<ScriptOption>> = _scriptOptions.asStateFlow()
 
@@ -69,6 +91,8 @@ class MusicViewModel : ViewModel() {
     private var page: Int = 1
     private var hasMore: Boolean = false
     private var searchSeq: Int = 0
+    private var chartSeq: Int = 0
+    private var chartsSource: String = ""
 
     private var userDefs: List<LxBridge.ScriptDef> = emptyList()
 
@@ -156,6 +180,9 @@ class MusicViewModel : ViewModel() {
                 if (lastKeyword.isNotEmpty() && _selectedSource.value.isNotEmpty()) {
                     search(lastKeyword)
                 }
+                if (_mode.value == MusicMode.CHARTS) {
+                    loadCharts()
+                }
             } else if (previousId != null && previousId != id && allDefs().any { it.id == previousId }) {
                 // The new script failed: reload the one that worked before
                 // so the tab is not left with an empty platform list.
@@ -233,6 +260,7 @@ class MusicViewModel : ViewModel() {
         if (code == _selectedSource.value) return
         _selectedSource.value = code
         if (lastKeyword.isNotEmpty()) search(lastKeyword)
+        if (_mode.value == MusicMode.CHARTS) loadCharts()
     }
 
     fun search(keyword: String) {
@@ -275,6 +303,58 @@ class MusicViewModel : ViewModel() {
             }
             _loadingMore.value = false
         }
+    }
+
+    // ------------------------------------------------------------- charts
+
+    fun selectMode(mode: MusicMode) {
+        if (mode == _mode.value) return
+        _mode.value = mode
+        if (mode == MusicMode.CHARTS) loadCharts()
+    }
+
+    /** (Re)loads the chart catalog of the selected platform. */
+    fun loadCharts() {
+        val source = _selectedSource.value
+        _selectedChart.value = null
+        _chartSongs.value = emptyList()
+        if (source.isEmpty()) {
+            _charts.value = emptyList()
+            chartsSource = ""
+            return
+        }
+        if (source == chartsSource && _charts.value.isNotEmpty()) return
+        val seq = ++chartSeq
+        _chartsLoading.value = true
+        viewModelScope.launch {
+            val list = MusicApi.charts(source)
+            if (seq != chartSeq) return@launch
+            chartsSource = source
+            _charts.value = list
+            _chartsLoading.value = false
+        }
+    }
+
+    fun openChart(chart: MusicChart) {
+        val source = _selectedSource.value
+        if (source.isEmpty()) return
+        _selectedChart.value = chart
+        _chartSongs.value = emptyList()
+        val seq = ++chartSeq
+        _chartSongsLoading.value = true
+        viewModelScope.launch {
+            val list = MusicApi.chartSongs(source, chart.id, 1)
+            if (seq != chartSeq) return@launch
+            _chartSongs.value = list
+            _chartSongsLoading.value = false
+        }
+    }
+
+    fun closeChart() {
+        chartSeq++
+        _selectedChart.value = null
+        _chartSongs.value = emptyList()
+        _chartSongsLoading.value = false
     }
 
     // ------------------------------------------------------------- misc
