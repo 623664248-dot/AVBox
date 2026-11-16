@@ -105,6 +105,11 @@
     <string name="music_source_tx">QQ音樂</string>
     <string name="music_source_wy">網易雲</string>
     <string name="music_source_mg">咪咕</string>
+    <string name="music_source_import">導入音源腳本</string>
+    <string name="music_source_imported">已導入音源：%1$s</string>
+    <string name="music_source_import_failed">音源導入失敗：%1$s</string>
+    <string name="music_source_delete">刪除音源</string>
+    <string name="music_source_deleted">音源已刪除</string>
     <string name="music_previous">上一首</string>
     <string name="music_next">下一首</string>
     <string name="tab_mine">我的</string>

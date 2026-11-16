@@ -232,6 +232,11 @@
     <string name="music_source_tx">QQ Music</string>
     <string name="music_source_wy">NetEase</string>
     <string name="music_source_mg">Migu</string>
+    <string name="music_source_import">Import source script</string>
+    <string name="music_source_imported">Source imported: %1$s</string>
+    <string name="music_source_import_failed">Source import failed: %1$s</string>
+    <string name="music_source_delete">Delete source</string>
+    <string name="music_source_deleted">Source deleted</string>
     <string name="tab_mine">Me</string>
     <string name="weekday_mon">Mon</string>
     <string name="weekday_tue">Tue</string>

@@ -1,14 +1,17 @@
 package com.github.avbox.osc.ui.page
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.github.avbox.osc.R
 import com.github.avbox.osc.music.LxBridge
+import com.github.avbox.osc.music.LxUserScripts
 import com.github.avbox.osc.music.MusicApi
 import com.github.avbox.osc.music.MusicTrack
 import com.github.avbox.osc.util.AppContextHolder
 import com.github.avbox.osc.util.KV
 import com.github.avbox.osc.util.LanguageManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -16,15 +19,21 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * Music tab state: owns the LX source bridge lifecycle (built-in scripts),
- * platform search (native, via MusicApi) and pagination. The Compose page
- * only renders this state.
+ * Music tab state: owns the LX source bridge lifecycle (built-in scripts
+ * plus user-imported ones), platform search (native, via MusicApi) and
+ * pagination. The Compose page only renders this state.
  */
 class MusicViewModel : ViewModel() {
 
-    data class ScriptOption(val id: String, val label: String, val selected: Boolean)
+    data class ScriptOption(
+        val id: String,
+        val label: String,
+        val selected: Boolean,
+        val user: Boolean = false,
+    )
 
     private val _hotWords = MutableStateFlow<List<String>>(emptyList())
     val hotWords: StateFlow<List<String>> = _hotWords.asStateFlow()
@@ -61,10 +70,18 @@ class MusicViewModel : ViewModel() {
     private var hasMore: Boolean = false
     private var searchSeq: Int = 0
 
+    private var userDefs: List<LxBridge.ScriptDef> = emptyList()
+
     init {
+        reloadUserDefs()
         refreshScriptOptions(selectedId = savedScriptId())
         viewModelScope.launch {
-            initBridge(savedScriptId())
+            val saved = savedScriptId()
+            if (!initBridge(saved) && saved != LxBridge.SCRIPTS.first().id) {
+                // The remembered script (e.g. an imported one) no longer
+                // loads; fall back to the default built-in so the tab works.
+                initBridge(LxBridge.SCRIPTS.first().id)
+            }
         }
         viewModelScope.launch {
             _hotWords.value = MusicApi.hotWords()
@@ -73,21 +90,41 @@ class MusicViewModel : ViewModel() {
 
     // ------------------------------------------------------------- bridge
 
-    private suspend fun initBridge(scriptId: String) {
+    /** All selectable scripts: built-ins first, then user-imported ones. */
+    private fun allDefs(): List<LxBridge.ScriptDef> = LxBridge.SCRIPTS + userDefs
+
+    private fun findDef(scriptId: String): LxBridge.ScriptDef =
+        allDefs().firstOrNull { it.id == scriptId } ?: LxBridge.SCRIPTS.first()
+
+    private fun reloadUserDefs() {
+        val context = AppContextHolder.context() ?: return
+        userDefs = LxUserScripts.loadDefs(context)
+    }
+
+    /**
+     * Loads [scriptId] into the bridge. Returns false (after emitting the
+     * failure toast) when the script cannot init; the caller decides on a
+     * fallback. On failure the platform list is cleared because the failed
+     * load already tore the previous script's context down.
+     */
+    private suspend fun initBridge(scriptId: String): Boolean {
         _scriptBusy.value = true
-        val def = LxBridge.SCRIPTS.firstOrNull { it.id == scriptId } ?: LxBridge.SCRIPTS.first()
-        try {
+        val def = findDef(scriptId)
+        return try {
             val info = LxBridge.loadScript(def)
             val registry = LxBridge.awaitInited()
             applyRegistry(registry)
             refreshScriptOptions(selectedId = def.id, info = info)
             _messages.tryEmit(str(R.string.music_script_ready, info.name + " " + info.version))
+            true
         } catch (e: LxBridge.LxException) {
             _sources.value = emptyList()
             _messages.tryEmit(str(R.string.music_script_init_failed, e.message ?: ""))
+            false
         } catch (e: Exception) {
             _sources.value = emptyList()
             _messages.tryEmit(str(R.string.music_script_init_failed, e.message ?: ""))
+            false
         } finally {
             _scriptBusy.value = false
         }
@@ -110,30 +147,83 @@ class MusicViewModel : ViewModel() {
 
     fun switchScript(id: String) {
         if (id == LxBridge.loadedScriptId && _sources.value.isNotEmpty()) return
-        KV.put(KV_SCRIPT_ID, id)
+        val previousId = LxBridge.loadedScriptId
         refreshScriptOptions(selectedId = id)
         viewModelScope.launch {
-            initBridge(id)
-            if (lastKeyword.isNotEmpty() && _selectedSource.value.isNotEmpty()) {
-                search(lastKeyword)
+            if (initBridge(id)) {
+                // Only persist the choice once the script actually works.
+                KV.put(KV_SCRIPT_ID, id)
+                if (lastKeyword.isNotEmpty() && _selectedSource.value.isNotEmpty()) {
+                    search(lastKeyword)
+                }
+            } else if (previousId != null && previousId != id && allDefs().any { it.id == previousId }) {
+                // The new script failed: reload the one that worked before
+                // so the tab is not left with an empty platform list.
+                refreshScriptOptions(selectedId = previousId)
+                if (initBridge(previousId)) {
+                    KV.put(KV_SCRIPT_ID, previousId)
+                }
             }
         }
     }
 
-    private fun refreshScriptOptions(selectedId: String, info: LxBridge.ScriptInfo? = null) {
-        _scriptOptions.value = LxBridge.SCRIPTS.map { def ->
-            val label = if (def.id == selectedId && info != null) {
-                info.name + " " + info.version
-            } else {
-                def.fallbackName
+    /** Imports a user-picked .js source script, then switches to it. */
+    fun importScript(uri: Uri) {
+        val context = AppContextHolder.context() ?: return
+        viewModelScope.launch {
+            try {
+                val def = withContext(Dispatchers.IO) { LxUserScripts.importScript(context, uri) }
+                reloadUserDefs()
+                refreshScriptOptions(selectedId = selectedScriptId())
+                _messages.tryEmit(
+                    str(R.string.music_source_imported, (def.fallbackName + " " + def.version).trim()),
+                )
+                switchScript(def.id)
+            } catch (e: Exception) {
+                _messages.tryEmit(str(R.string.music_source_import_failed, e.message ?: ""))
             }
-            ScriptOption(id = def.id, label = label, selected = def.id == selectedId)
+        }
+    }
+
+    /** Deletes a user-imported script; falls back to the default if it was in use. */
+    fun deleteScript(id: String) {
+        if (userDefs.none { it.id == id }) return
+        val context = AppContextHolder.context() ?: return
+        val wasInUse = id == LxBridge.loadedScriptId || id == savedScriptId()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { LxUserScripts.delete(context, id) }
+            reloadUserDefs()
+            _messages.tryEmit(str(R.string.music_source_deleted))
+            if (wasInUse) {
+                switchScript(LxBridge.SCRIPTS.first().id)
+            } else {
+                refreshScriptOptions(selectedId = selectedScriptId())
+            }
+        }
+    }
+
+    private fun selectedScriptId(): String =
+        _scriptOptions.value.firstOrNull { it.selected }?.id ?: savedScriptId()
+
+    private fun refreshScriptOptions(selectedId: String, info: LxBridge.ScriptInfo? = null) {
+        _scriptOptions.value = allDefs().map { def ->
+            val label = when {
+                def.id == selectedId && info != null -> (info.name + " " + info.version).trim()
+                def.version.isNotEmpty() -> (def.fallbackName + " " + def.version).trim()
+                else -> def.fallbackName
+            }
+            ScriptOption(
+                id = def.id,
+                label = label,
+                selected = def.id == selectedId,
+                user = def.filePath != null,
+            )
         }
     }
 
     private fun savedScriptId(): String {
         val saved: String? = KV.get(KV_SCRIPT_ID)
-        return saved?.takeIf { id -> LxBridge.SCRIPTS.any { it.id == id } }
+        return saved?.takeIf { id -> allDefs().any { it.id == id } }
             ?: LxBridge.SCRIPTS.first().id
     }
 

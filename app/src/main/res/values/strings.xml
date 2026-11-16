@@ -232,6 +232,11 @@
     <string name="music_source_tx">QQ音乐</string>
     <string name="music_source_wy">网易云</string>
     <string name="music_source_mg">咪咕</string>
+    <string name="music_source_import">导入音源脚本</string>
+    <string name="music_source_imported">已导入音源：%1$s</string>
+    <string name="music_source_import_failed">音源导入失败：%1$s</string>
+    <string name="music_source_delete">删除音源</string>
+    <string name="music_source_deleted">音源已删除</string>
     <string name="tab_mine">我的</string>
     <string name="weekday_mon">周一</string>
     <string name="weekday_tue">周二</string>

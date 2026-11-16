@@ -133,3 +133,28 @@ name/singer/albumName/interval(mm:ss)/img/types/typeUrl 等洛雪标准字段。
 - 平台 chips 只显示能原生搜索的平台（kg/kw/tx/wy）：脚本还注册了
   mg/qs 等无搜索实现的平台，显示出来只会搜出空列表。
 - MusicPage 顶部加状态栏 inset，修搜索框压到状态栏的问题。
+
+## v1.7.2 自选音源（像洛雪一样自己换音源）
+
+- 音乐页「音源」对话框底部新增「导入音源脚本」：系统文件选择器
+  （OpenDocument，mime 放宽到 text/javascript、application/javascript、
+  text/* 并带 */* 兜底）选手机里的 .js 文件即可导入，导入成功后自动
+  切换到新音源试运行。
+- 存储：脚本复制到 app 私有目录 files/lx_user_sources/<id>.js，元数据
+  （id/显示名/版本/文件名）以 JSON 数组存 KV 的 lx_user_scripts 键；
+  新增 music/LxUserScripts.kt 负责文件与元数据，LxBridge.ScriptDef
+  增加可空 filePath/version，loadScript 按 asset/file 两种来源读脚本，
+  头部解析（@name/@version）、inited、解析播放链接的流程完全复用。
+- 导入校验（故意宽松）：非空、大小 ≤4MB、含 globalThis.lx /
+  EVENT_NAMES / lx.on( / lx.send( / window.lx 任一特征；混淆脚本若把
+  特征藏起来，会放行导入但在初始化时以可见错误失败，不会静默坏掉。
+  显示名优先取脚本头部 @name，缺失时用原文件名（去扩展名）。
+- 切换健壮性：选择只在初始化成功后才写入 KV；切换到坏脚本失败时
+  自动重新加载上一个可用脚本并恢复选择；启动时记住的用户脚本若加载
+  失败，自动回退内置星海。
+- 删除：用户音源条目右侧有删除按钮，删文件+元数据；删的正是当前在用
+  的脚本时自动切回内置星海。内置脚本（星海、全豆要）不可删、列表
+  不变。
+- 限制：同名同版本重复导入会生成新条目（不去重）；脚本文件只从本地
+  导入，不支持 URL 在线导入；导入的脚本与内置脚本一样在 QuickJS 里
+  运行，其联网行为不受 app 额外限制（与洛雪自定义源一致，风险自担）。

@@ -47,7 +47,19 @@ object LxBridge {
 
     class LxException(message: String) : Exception(message)
 
-    data class ScriptDef(val id: String, val assetPath: String, val fallbackName: String)
+    /**
+     * A loadable source script: either a built-in asset ([assetPath]) or a
+     * user-imported file ([filePath], absolute path in the app's private
+     * storage). [version] is only filled for user scripts, from the import
+     * metadata; built-ins learn their version from the script header.
+     */
+    data class ScriptDef(
+        val id: String,
+        val assetPath: String?,
+        val fallbackName: String,
+        val filePath: String? = null,
+        val version: String = "",
+    )
 
     val SCRIPTS: List<ScriptDef> = listOf(
         ScriptDef("xinghai", "lx_sources/xinghai.js", "星海音乐源"),
@@ -103,18 +115,27 @@ object LxBridge {
     // ------------------------------------------------------------- lifecycle
 
     /**
-     * (Re)loads a built-in source script in a fresh QuickJS context.
-     * Returns once the script text has been evaluated; the script's
-     * send('inited') may arrive later (some scripts check their servers
-     * first) — use [awaitInited] for the source registry.
+     * (Re)loads a source script (built-in asset or user-imported file) in a
+     * fresh QuickJS context. Returns once the script text has been
+     * evaluated; the script's send('inited') may arrive later (some scripts
+     * check their servers first) — use [awaitInited] for the source
+     * registry.
      */
     suspend fun loadScript(def: ScriptDef): ScriptInfo {
         val context = AppContextHolder.context()
             ?: throw LxException("app context not ready")
         val raw = try {
-            context.assets.open(def.assetPath).bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val filePath = def.filePath
+            if (filePath != null) {
+                java.io.File(filePath).readText(Charsets.UTF_8)
+            } else {
+                val assetPath = def.assetPath ?: throw LxException("script path missing")
+                context.assets.open(assetPath).bufferedReader(Charsets.UTF_8).use { it.readText() }
+            }
+        } catch (e: LxException) {
+            throw e
         } catch (e: Exception) {
-            throw LxException("cannot read built-in script: " + (e.message ?: ""))
+            throw LxException("cannot read script: " + (e.message ?: ""))
         }
         val scriptText = raw.removePrefix("\uFEFF")
         val info = parseScriptInfo(scriptText, def.fallbackName)
@@ -728,6 +749,10 @@ object LxBridge {
     }
 
     // ------------------------------------------------------------- header parse
+
+    /** Header parse shared with the user-script importer (LxUserScripts). */
+    fun parseScriptInfoOf(scriptText: String, fallbackName: String): ScriptInfo =
+        parseScriptInfo(scriptText.removePrefix("\uFEFF"), fallbackName)
 
     private fun parseScriptInfo(script: String, fallbackName: String): ScriptInfo {
         val head = script.substring(0, minOf(script.length, 4096))
