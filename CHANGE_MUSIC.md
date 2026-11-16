@@ -482,3 +482,13 @@ lastResolvedQuality()（记录最近一次 getMusicUrl 实际命中的
   自动改名）；下载完成状态只记当前歌曲，切歌即重置。
 - 收藏列表在音乐页切入「我的收藏」时刷新，停留在该模式时从
   播放页返回不会自动刷新（切一下模式即可）。
+
+## v1.11.0 首次构建失败修复（版本号不变）
+
+- 构建死于 `:app:compileReleaseKotlin`，仅 1 处错误：
+  LxMusicPlayerActivity 取色代码用了 Coil 2 的
+  `ImageRequest.Builder.allowHardware(false)`，本项目是 Coil 3.6.3，
+  该方法不存在。
+- 修复：删掉 allowHardware 调用；拿到 bitmap 后若 config 为
+  HARDWARE（API 26+），先 copy 到 ARGB_8888 软件位图再 getPixels
+  （copy/Config.HARDWARE/getPixels 均已对 android.jar 核实）。

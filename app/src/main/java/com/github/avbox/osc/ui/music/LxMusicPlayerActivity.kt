@@ -327,10 +327,19 @@ class LxMusicPlayerActivity : BaseActivity() {
             val request = ImageRequest.Builder(this)
                 .data(url)
                 .size(48, 48)
-                .allowHardware(false)
                 .build()
             val result = SingletonImageLoader.get(this).execute(request)
-            val bitmap = (result as? SuccessResult)?.image?.toBitmap() ?: return null
+            val raw = (result as? SuccessResult)?.image?.toBitmap() ?: return null
+            // Coil 3 has no allowHardware(false) (that was Coil 2). A
+            // HARDWARE-config bitmap cannot be read back with getPixels,
+            // so copy it into a software config first.
+            val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                raw.config == Bitmap.Config.HARDWARE
+            ) {
+                raw.copy(Bitmap.Config.ARGB_8888, false) ?: return null
+            } else {
+                raw
+            }
             averageDarkenedColor(bitmap)
         } catch (t: Throwable) {
             null
