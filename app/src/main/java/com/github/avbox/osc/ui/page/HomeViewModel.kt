@@ -82,6 +82,12 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
 
     companion object {
         const val HERO_VIDEO_COUNT = 5
+        /**
+         * v1.14.0: home-load watchdog. Must stay above the sort/list spider
+         * timeout (30 s) so it never fires while a spider call is still
+         * running; 35 s leaves 5 s of margin.
+         */
+        const val HOME_LOAD_WATCHDOG_MS = 35_000L
     }
 
     private val _currentSource = MutableStateFlow<SourceBean?>(null)
@@ -122,6 +128,12 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
     private val _sortLoadFailed = MutableStateFlow(false)
     val sortLoadFailed = _sortLoadFailed.asStateFlow()
     private var sortRetried = false
+    /**
+     * v1.14.0: set when the home-load watchdog fires. A sort result arriving
+     * after that is stale and must not flip the Error page back to Loading.
+     * Cleared on every fresh loadHome() / manual retrySort().
+     */
+    private var homeLoadTimedOut = false
     private val listRetried = HashSet<String>()
 
     private val scope = viewModelScope
@@ -287,6 +299,7 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
         sortsLoaded.value = false
         _sortLoadFailed.value = false
         sortRetried = false
+        homeLoadTimedOut = false
         listRetried.clear()
         _rec.value = Rec(PartitionState.Loading, emptyList())
         _partitions.value = emptyList()
@@ -320,6 +333,7 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
         val recLoading = _rec.value.state == PartitionState.Loading
         val partitionLoading = _partitions.value.any { it.state == PartitionState.Loading }
         if (!recLoading && !partitionLoading) return
+        homeLoadTimedOut = true
         if (recLoading) {
             _rec.value = Rec(PartitionState.Error, emptyList())
         }
@@ -350,6 +364,7 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
         AppLog.i("echo--sort-manual-retry: key=$key")
         _sortLoadFailed.value = false
         sortRetried = true
+        homeLoadTimedOut = false
         _rec.value = Rec(PartitionState.Loading, emptyList())
         sortsLoaded.value = false
         _pageLoading.value = true
@@ -383,14 +398,17 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
             AppLog.i("echo--sort-stale-drop: key=$key absKey=${absXml.sourceKey}")
             return
         }
+        if (homeLoadTimedOut) {
+            // v1.14.0: the watchdog already flipped the page to Error; a late
+            // sort result must not flip it back to Loading. The user retries
+            // manually from the Error state (retrySort clears the flag).
+            AppLog.i("echo--sort-late-drop: key=$key timedOut")
+            return
+        }
 
         if (absXml != null && absXml.loadFailed) {
-            if (!sortRetried) {
-                sortRetried = true
-                AppLog.i("echo--sort-retry: src=$key")
-                sortViewModel.getSort(key, false)
-                return
-            }
+            // v1.14.0: no silent auto-retry after a homeContent failure —
+            // enter the failure state at once; the user retries manually.
             AppLog.i("echo--sort-failed: src=$key")
             _sortLoadFailed.value = true
             _rec.value = Rec(PartitionState.Empty, emptyList())
@@ -474,7 +492,7 @@ class HomeViewModel : ViewModel(), TmdbPosterCache {
     private fun armWatchdog() {
         watchdogJob?.cancel()
         watchdogJob = scope.launch {
-            delay(20_000)
+            delay(HOME_LOAD_WATCHDOG_MS)
             onHomeLoadTimeout()
         }
     }

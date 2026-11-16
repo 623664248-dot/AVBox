@@ -32,10 +32,22 @@ class SortLoader(
     private val resultParser: SourceResultParser,
 ) {
 
+    companion object {
+        /**
+         * v1.14.0: spider homeContent timeout for the sort flow. Heavy spiders
+         * (multi-step token login, local proxy server) cannot finish in the
+         * default playTimeoutSeconds (15 s); this is deliberately independent
+         * of playTimeoutSeconds so the playback chain is untouched.
+         */
+        private const val SPIDER_TIMEOUT_MS = 30_000L
+    }
+
     private fun cacheSort(sourceKey: String, sortXml: AbsSortXml?) {
         attachSortSource(sourceKey, sortXml)
         val sourceBean = ApiConfig.get().getSource(sourceKey)
-        if (!hasHomeRecVideos(sortXml)) {
+        // v1.14.0: also cache class-only results (no home rec videos), so a
+        // re-entry can reuse the classes instead of re-running homeContent.
+        if (!hasHomeRecVideos(sortXml) && !hasSortClasses(sortXml)) {
             return
         }
         if (!shouldBypassSortCache(sourceKey, sourceBean) && !hasActionSort(sortXml)) {
@@ -76,6 +88,10 @@ class SortLoader(
     private fun hasHomeRecVideos(sortXml: AbsSortXml?): Boolean {
         val videoList = sortXml?.videoList
         return videoList != null && videoList.isNotEmpty()
+    }
+
+    private fun hasSortClasses(sortXml: AbsSortXml?): Boolean {
+        return sortXml?.classes?.sortList?.isNotEmpty() == true
     }
 
     private fun hasActionVideo(videos: List<Movie.Video?>?): Boolean {
@@ -123,8 +139,11 @@ class SortLoader(
                 sortCache[sourceKey]
             }
             if (cached != null) {
-                val cachedVideoList = cached.videoList
-                if (cachedVideoList != null && cachedVideoList.isNotEmpty()) {
+                // v1.14.0: classes alone are enough to serve from cache; a
+                // non-empty videoList still counts, as before.
+                val hasClasses = cached.classes?.sortList?.isNotEmpty() == true
+                val hasVideos = cached.videoList?.isNotEmpty() == true
+                if (hasClasses || hasVideos) {
                     attachSortSource(sourceKey, cached)
                     postSortResult(sourceKey, cached)
                     return
@@ -150,7 +169,7 @@ class SortLoader(
                 val sp = ApiConfig.get().getCSP(sourceBean)
                 val json = SpiderReaper.track(sp) { sp.homeContent(true) }
                 json
-            }, sourceBean.playTimeoutSeconds() * 1000L, "echo--getSort--" + sourceBean.key)
+            }, SPIDER_TIMEOUT_MS, "echo--getSort--" + sourceBean.key)
         }
         if (sortJson == null) {
             AppLog.i("echo--getSort-spider-null:$sourceKey")

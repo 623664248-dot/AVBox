@@ -28,6 +28,15 @@ class ListLoader(
     private val resultParser: SourceResultParser,
 ) {
 
+    companion object {
+        /**
+         * v1.14.0: spider categoryContent/homeVideoContent timeout. Heavy
+         * spiders cannot finish in the default playTimeoutSeconds (15 s);
+         * deliberately independent of it so the playback chain is untouched.
+         */
+        private const val SPIDER_TIMEOUT_MS = 30_000L
+    }
+
     suspend fun getList(sourceKey: String?, sortData: MovieSort.SortData?, page: Int) {
         if (sortData == null) {
             AppLog.i("echo-getList-sortData-null")
@@ -57,7 +66,7 @@ class ListLoader(
             BoundedCall.call(Callable<String> {
                 val sp = ApiConfig.get().getCSP(sourceBean)
                 SpiderReaper.track(sp) { sp.categoryContent(sortData.id, page.toString(), true, sortData.filterSelect) }
-            }, sourceBean.playTimeoutSeconds() * 1000L, "echo--getList--" + sourceBean.key)
+            }, SPIDER_TIMEOUT_MS, "echo--getList--" + sourceBean.key)
         }
         if (json != null) {
             withContext(Dispatchers.IO) { resultParser.json(listResult, json, sourceBean.key) }
@@ -147,7 +156,7 @@ class ListLoader(
                 BoundedCall.call(Callable<String> {
                     val sp = ApiConfig.get().getCSP(sourceBean)
                     SpiderReaper.track(sp) { sp.homeVideoContent() }
-                }, sourceBean.playTimeoutSeconds() * 1000L, "echo--homeRecList--" + sourceBean.key)
+                }, SPIDER_TIMEOUT_MS, "echo--homeRecList--" + sourceBean.key)
             }
             if (sortJson == null) return null
             return withContext(Dispatchers.IO) { resultParser.json(null, sortJson, sourceBean.key)?.movie?.videoList }
