@@ -66,9 +66,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.pointer.changedToCanceled
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -724,6 +726,9 @@ private fun MusicSourceFab(
                             dragOffset = startDragOffset
                             finished = true
                         } else if (change.changedToUp()) {
+                            // Compose 1.12 has no separate cancel API
+                            // (changedToCanceled does not exist); a canceled
+                            // pointer also ends the gesture through here.
                             change.consume()
                             if (movedPx < clickThresholdPx) {
                                 // Tap: undo the few px of finger drift and
@@ -733,9 +738,6 @@ private fun MusicSourceFab(
                             } else {
                                 persistState.value(current)
                             }
-                            finished = true
-                        } else if (change.changedToCanceled()) {
-                            dragOffset = startDragOffset
                             finished = true
                         } else {
                             val delta = change.positionChange()

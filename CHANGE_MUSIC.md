@@ -334,3 +334,15 @@ lyricLines 数据与 MusicLrc 解析，不新造管线。沉浸模式保留最�
 - v1.9.0 / v1.9.1 的其余成果保留不动：KV 两处 "" 默认值修复
   （音源导入名单与选择持久化）、awaitInited 超时 30s、沉浸歌
   词、悬浮音源按钮。
+
+## v1.9.2 构建失败修复（版本号不变）
+
+- v1.9.1 与 v1.9.2 前两次构建均死于 `:app:compileReleaseKotlin`，
+  报错集中在 MusicPage.kt 悬浮按钮手势代码（构建日志实证）。
+- 根因：项目 Compose 为 BOM 2026.09.00 / UI 1.12.1，手势代码
+  漏 import `foundation.gestures.awaitEachGesture` 与
+  `awaitFirstDown`；且 `changedToCanceled()` 在 1.12.1 中根本不
+  存在（已对官方 AAR 字节码逐项核对）。`positionChange()` 是
+  `ui.input.pointer` 包的扩展函数，import 必须保留。
+- 修复：补上两个 gestures import 与 positionChange import，
+  删除 changedToCanceled 分支——取消手势与抬手走同一结束路径。
