@@ -632,3 +632,56 @@ Python 引擎。
 - 39 号脚本（netease_music）自带写死的外置缓存目录
   /storage/emulated/0/Download/...，无存储权限时其缓存写入可能
   失败，属脚本自身行为，本版未改脚本逻辑（仅加原名注释）。
+
+## v1.13.1 py 播放修复与来源 chip 显示名
+
+### 来源 chip 显示名（用户点名）
+
+- v1.13.0 播放页来源 chip 直接渲染 MusicTrack.source，py 歌曲露出
+  原始 id「py:netease_music」。改为展示名传递：LxMusicPlayerActivity
+  在 playAt 设置当前歌曲时算好展示名，写入 LxPlayerState.sourceLabel，
+  LxMusicPlayerScreen 只读状态渲染（UDF），旧的屏内 lxSourceLabel
+  映射函数删除。py 歌曲用 PyMusicSources 注册表的显示名（如
+  「网易云音乐」「小心儿悠悠（酷我）」），注册项已被删除时兜底新
+  字符串 music_py_fallback「py 音源」（四语齐全）；JS 音源歌曲仍是
+  平台名（酷狗/酷我/QQ音乐/网易云/咪咕），音质 chip 不变。内部
+  MusicTrack.source 不动，仍是 "py:<slug>"。
+- 其余展示面核查：队列对话框与音乐页列表行（含收藏列表）只显示
+  歌名/歌手，LxFavorites 里的 source 只是内部 key，无原始 id 露出，
+  无需改。
+
+### py 调用全局串行化（问题二根因判断）
+
+- 实测症状：homeContent、搜索、detail 选集都通，但点歌的
+  playerContent 一直转圈到 25s 超时（《布拉格广场》），后一首
+  《老街》弹出「爬虫加载失败或无响应」；小心儿悠悠点歌手的
+  categoryContent 也长时间无响应报同样错误。
+- 判断：页面（MusicViewModel）与播放器（LxMusicPlayerActivity）
+  经 pyLoader 按 key 拿到的是同一个缓存 Spider 实例，多线程
+  并发进入同一个 Chaquopy 解释器会互相卡死——单发调用正常、
+  并发才挂，与症状吻合，是最可能的根因。
+- 修法：PyMusicBridge 加一把全局 Mutex（serialized 包裹层），
+  home/category/search/detailEpisodes/resolve 五个入口的「取
+  Spider + 调用 + 解析」全程串行。Mutex 不可重入，resolve 内部
+  改走不加锁的 detailEpisodesLocked，避免自死锁。调用仍在
+  Dispatchers.IO + BoundedCall 内执行，UI 线程不堵。
+
+### 超时放宽
+
+- playerContent：25s → 60s。解析型爬虫逐个轮询备用接口
+  （netease_music 内置多个备用解析地址），25s 经常不够一轮。
+- detailContent / categoryContent / searchContent：25s → 45s。
+- homeContent（首次，含 Python 冷启动）：保持 45s。
+- 报错路径不变：超时后 BoundedCall 返回 null → PyException
+  「爬虫加载失败或无响应」。播放页的失败处理是 v1.13.0 既有
+  逻辑（本版核查确认、未重构）：resolve 抛错后 catch 里置
+  state.buffering=false，封面转圈停止，同时 errorText 显示原因
+  并弹 Toast，不会无限转圈。
+
+### 已知限制（沿用与新增）
+
+- BoundedCall 超时靠中断其工作线程，个别卡在原生层的 Python
+  调用可能在后台残留一小段时间；串行锁在超时抛错后即释放，
+  后续调用可继续排队进入，不会因一次超时永久堵死。
+- 其余沿用 v1.13.0：py 歌曲无歌词；parse 型与 proxy:// 地址
+  不支持；py 运行时与视频侧共用。

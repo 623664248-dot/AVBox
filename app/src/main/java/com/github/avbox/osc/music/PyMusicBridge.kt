@@ -8,6 +8,8 @@ import com.github.catvod.crawler.SpiderReaper
 import com.github.avbox.osc.util.BoundedCall
 import java.util.concurrent.Callable
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONException
@@ -33,6 +35,14 @@ import org.json.JSONObject
  * source reuse the loaded module; a video-config switch clears that
  * cache (pyLoader.clear), after which the next call simply re-creates
  * the spider through getCSP again.
+ *
+ * Every entry point is serialised through one bridge-wide Mutex
+ * ([serialized]): the music page and the player resolve through the
+ * SAME cached spider instance, and the shared Chaquopy interpreter
+ * wedges when several threads enter it at once. v1.13.0 field tests
+ * matched that failure mode exactly — home/search/detail (issued one
+ * at a time) answered, while category and player calls overlapped
+ * with other calls and hung until their timeout.
  */
 object PyMusicBridge {
 
@@ -51,13 +61,26 @@ object PyMusicBridge {
     data class Resolved(val url: String, val headers: Map<String, String>)
 
     // The first call also pays the Python cold start (pyramid allows the
-    // spider init up to 30 s internally), so it gets the longest budget.
+    // spider init up to 30 s internally). List/detail calls get 45 s and
+    // playerContent 60 s: resolver spiders poll several fallback APIs in
+    // sequence before answering (netease_music rotates through half a
+    // dozen), which regularly overran the old flat 25 s budget (v1.13.1).
     private const val TIMEOUT_FIRST_MS = 45_000L
-    private const val TIMEOUT_MS = 25_000L
+    private const val TIMEOUT_MS = 45_000L
+    private const val TIMEOUT_PLAYER_MS = 60_000L
+
+    /** One spider call at a time across the whole bridge; see class doc. */
+    private val callMutex = Mutex()
+
+    private suspend fun <T> serialized(block: suspend () -> T): T =
+        callMutex.withLock { block() }
 
     // ------------------------------------------------------------- queries
 
     suspend fun home(context: Context, def: PyMusicSources.PyDef): HomeResult =
+        serialized { homeLocked(context, def) }
+
+    private suspend fun homeLocked(context: Context, def: PyMusicSources.PyDef): HomeResult =
         withContext(Dispatchers.IO) {
             val raw = callSpider(context, def, TIMEOUT_FIRST_MS, "pymusic-home") {
                 it.homeContent(false)
@@ -82,6 +105,13 @@ object PyMusicBridge {
         def: PyMusicSources.PyDef,
         typeId: String,
         page: Int,
+    ): ListResult = serialized { categoryLocked(context, def, typeId, page) }
+
+    private suspend fun categoryLocked(
+        context: Context,
+        def: PyMusicSources.PyDef,
+        typeId: String,
+        page: Int,
     ): ListResult = withContext(Dispatchers.IO) {
         val raw = callSpider(context, def, TIMEOUT_MS, "pymusic-category") {
             it.categoryContent(typeId, page.toString(), false, null)
@@ -90,6 +120,13 @@ object PyMusicBridge {
     }
 
     suspend fun search(
+        context: Context,
+        def: PyMusicSources.PyDef,
+        keyword: String,
+        page: Int,
+    ): ListResult = serialized { searchLocked(context, def, keyword, page) }
+
+    private suspend fun searchLocked(
         context: Context,
         def: PyMusicSources.PyDef,
         keyword: String,
@@ -107,6 +144,12 @@ object PyMusicBridge {
      * exactly one episode.
      */
     suspend fun detailEpisodes(
+        context: Context,
+        def: PyMusicSources.PyDef,
+        track: MusicTrack,
+    ): List<MusicTrack> = serialized { detailEpisodesLocked(context, def, track) }
+
+    private suspend fun detailEpisodesLocked(
         context: Context,
         def: PyMusicSources.PyDef,
         track: MusicTrack,
@@ -160,6 +203,12 @@ object PyMusicBridge {
         context: Context,
         def: PyMusicSources.PyDef,
         track: MusicTrack,
+    ): Resolved = serialized { resolveLocked(context, def, track) }
+
+    private suspend fun resolveLocked(
+        context: Context,
+        def: PyMusicSources.PyDef,
+        track: MusicTrack,
     ): Resolved = withContext(Dispatchers.IO) {
         val flag: String
         val epId: String
@@ -167,11 +216,13 @@ object PyMusicBridge {
             flag = track.pyFlag
             epId = track.pyEpId
         } else {
-            val first = detailEpisodes(context, def, track).first()
+            // Already inside the mutex: the Locked variant must be used
+            // here, the public one would deadlock re-entering it.
+            val first = detailEpisodesLocked(context, def, track).first()
             flag = first.pyFlag
             epId = first.pyEpId
         }
-        val raw = callSpider(context, def, TIMEOUT_MS, "pymusic-player") {
+        val raw = callSpider(context, def, TIMEOUT_PLAYER_MS, "pymusic-player") {
             it.playerContent(flag, epId, ApiConfig.get().vipParseFlags)
         }
         parsePlayerResult(raw)

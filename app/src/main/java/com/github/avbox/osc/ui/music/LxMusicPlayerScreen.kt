@@ -208,7 +208,9 @@ fun LxMusicPlayerScreen(
                 .padding(top = 4.dp),
         )
 
-        // Small tag chips: the platform the song came from, plus the
+        // Small tag chips: the display name of the source the song came
+        // from (computed by the Activity into state.sourceLabel — the
+        // raw source id, e.g. "py:<slug>", is never shown), plus the
         // resolved quality when the bridge reported one.
         Row(
             modifier = Modifier
@@ -217,8 +219,8 @@ fun LxMusicPlayerScreen(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (track != null) {
-                PlayerTagChip(text = lxSourceLabel(track.source))
+            if (track != null && state.sourceLabel.isNotEmpty()) {
+                PlayerTagChip(text = state.sourceLabel)
             }
             if (state.qualityText.isNotEmpty()) {
                 Spacer(Modifier.width(8.dp))
@@ -456,18 +458,6 @@ private fun loopModeIcon(mode: LxLoopMode): Int {
         LxLoopMode.SINGLE -> R.drawable.ic_repeat_one
         LxLoopMode.SHUFFLE -> R.drawable.ic_shuffle
         LxLoopMode.ORDER -> R.drawable.ic_play_order
-    }
-}
-
-@Composable
-private fun lxSourceLabel(code: String): String {
-    return when (code) {
-        "kg" -> stringResource(R.string.music_source_kg)
-        "kw" -> stringResource(R.string.music_source_kw)
-        "tx" -> stringResource(R.string.music_source_tx)
-        "wy" -> stringResource(R.string.music_source_wy)
-        "mg" -> stringResource(R.string.music_source_mg)
-        else -> code
     }
 }
 

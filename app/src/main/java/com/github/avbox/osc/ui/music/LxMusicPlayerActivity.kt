@@ -223,6 +223,7 @@ class LxMusicPlayerActivity : BaseActivity() {
         val index = ((target % queue.size) + queue.size) % queue.size
         state.index = index
         val track = queue[index]
+        state.sourceLabel = sourceLabelFor(track)
         state.errorText = null
         state.lyricLines = emptyList()
         state.positionMs = 0L
@@ -291,6 +292,27 @@ class LxMusicPlayerActivity : BaseActivity() {
                     state.lyricLines = MusicLrc.parse(raw)
                 }
             }
+        }
+    }
+
+    /**
+     * Display name of [track]'s source for the player page chip: the py
+     * registry's display name for spider tracks (never the raw
+     * "py:<slug>" id; the generic py label when the source was deleted),
+     * the platform name for LX tracks.
+     */
+    private fun sourceLabelFor(track: MusicTrack): String {
+        if (track.isPy) {
+            return PyMusicSources.findDef(this, track.pySourceId)?.name
+                ?: getString(R.string.music_py_fallback)
+        }
+        return when (track.source) {
+            "kg" -> getString(R.string.music_source_kg)
+            "kw" -> getString(R.string.music_source_kw)
+            "tx" -> getString(R.string.music_source_tx)
+            "wy" -> getString(R.string.music_source_wy)
+            "mg" -> getString(R.string.music_source_mg)
+            else -> track.source
         }
     }
 

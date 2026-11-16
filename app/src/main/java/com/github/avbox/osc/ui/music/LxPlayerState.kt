@@ -77,6 +77,15 @@ class LxPlayerState {
     var qualityText by mutableStateOf("")
 
     /**
+     * Display-ready name of the current track's source for the tag chip:
+     * the platform name for LX tracks, the py registry's display name
+     * for spider tracks. Computed by the Activity when a track becomes
+     * current ("" until then); the raw MusicTrack.source id — notably
+     * "py:<slug>" — is never rendered.
+     */
+    var sourceLabel by mutableStateOf("")
+
+    /**
      * Page background colour sampled from the current cover (already
      * darkened); null until extraction succeeds, the screen then falls
      * back to a deep blue-grey.
