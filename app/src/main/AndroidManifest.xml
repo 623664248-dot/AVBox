@@ -80,6 +80,9 @@
             android:name=".ui.MusicPlayerActivity"
             android:configChanges="orientation|screenSize" />
         <activity
+            android:name=".ui.music.LxMusicPlayerActivity"
+            android:configChanges="orientation|screenSize" />
+        <activity
             android:name=".ui.SearchActivity"
             android:windowSoftInputMode="stateHidden|adjustResize" />
         <activity

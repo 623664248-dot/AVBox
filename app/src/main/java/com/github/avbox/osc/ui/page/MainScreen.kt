@@ -90,12 +90,12 @@ import kotlinx.coroutines.launch
 private enum class AppTab(@StringRes val labelRes: Int, @DrawableRes val icon: Int) {
     HOME(R.string.tab_home, R.drawable.ic_tab_home),
     RECORDS(R.string.tab_records, R.drawable.ic_tab_records),
-    FOLLOWING(R.string.tab_following, R.drawable.ic_tab_following),
+    FOLLOWING(R.string.tab_music, R.drawable.ic_tab_music),
     SETTINGS(R.string.tab_mine, R.drawable.ic_tab_mine),
 }
 
 // Bottom-nav slot layout, shared by the surface bars and the glass bar:
-// 0 首页 · 1 网页 (action) · 2 直播 (action, unless hidden) · 3 追剧 · 4 我的.
+// 0 首页 · 1 网页 (action) · 2 直播 (action, unless hidden) · 3 音乐 · 4 我的.
 // The web action sits in the slot the records tab used to occupy; records
 // itself left the bar for the home top bar and still opens the same pager
 // page (AppTab.RECORDS), so its destination and navigation are unchanged.
@@ -370,7 +370,7 @@ private fun MainContent() {
                                     onOpenRecords = { selectTab(AppTab.RECORDS.ordinal) },
                                 )
                                 AppTab.RECORDS -> RecordsPage(contentPadding = pageContentPadding)
-                                AppTab.FOLLOWING -> FollowingPage(contentPadding = pageContentPadding)
+                                AppTab.FOLLOWING -> MusicPage(contentPadding = pageContentPadding)
                                 AppTab.SETTINGS -> SettingsPage(contentPadding = pageContentPadding)
                             }
                         }
