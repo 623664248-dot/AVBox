@@ -5,6 +5,8 @@ import com.github.avbox.osc.ui.theme.GLASS_BACKDROP_BAND_MARGIN_DP
 
 object NavMetrics {
 
+    // (v1.6.4 rebuild trigger: the first CI run died on a transient pip
+    // download error in the Chaquopy task, before any code compiled.)
     const val MARGIN_DP = 12
 
     const val BAR_CROSS_DP = 64
