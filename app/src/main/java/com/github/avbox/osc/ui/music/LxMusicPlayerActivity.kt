@@ -259,7 +259,7 @@ class LxMusicPlayerActivity : BaseActivity() {
             when {
                 mode == MusicAppearance.EQ_BASS -> {
                     bassBoost?.let { boost ->
-                        boost.strength = EQ_EFFECT_STRENGTH
+                        boost.setStrength(EQ_EFFECT_STRENGTH)
                         boost.enabled = true
                     }
                 }
@@ -267,7 +267,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                 mode == MusicAppearance.EQ_SURROUND -> {
                     virtualizer?.let { virt ->
                         if (virt.strengthSupported) {
-                            virt.strength = EQ_EFFECT_STRENGTH
+                            virt.setStrength(EQ_EFFECT_STRENGTH)
                         }
                         virt.enabled = true
                     }

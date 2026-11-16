@@ -376,3 +376,13 @@ lyricLines 数据与 MusicLrc 解析，不新造管线。沉浸模式保留最�
   （不引第三方库）；EQ 依赖设备 audiofx 支持，部分设备可能无预设
   或效果创建失败，此时音效节只剩原声可选、播放不受影响；背景图
   每次重选会替换旧图（旧文件自动清理）。
+
+## v1.10.0 构建失败修复（版本号不变）
+
+- 首次构建死于 `:app:compileReleaseKotlin`，仅 2 处报错，均在
+  LxMusicPlayerActivity 的音效代码：`BassBoost`/`Virtualizer`
+  没有 `getStrength()`（只有 `setStrength(short)` 与
+  `getRoundedStrength()`），Kotlin 无法合成 `strength` 属性。
+- 修复：两处改为显式 `setStrength(EQ_EFFECT_STRENGTH)` 调用
+  （已对 android.jar 字节码核对；`strengthSupported` 属性合法，
+  编译器亦未报错）。
