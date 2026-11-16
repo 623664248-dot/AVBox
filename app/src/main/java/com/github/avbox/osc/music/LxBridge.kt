@@ -582,7 +582,9 @@ object LxBridge {
         if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
             try {
                 val parsed: Any = if (trimmed.startsWith("[")) JSONArray(trimmed) else JSONObject(trimmed)
-                return jsonToJs(context, parsed)
+                // jsonToJs is nullable-typed, but a JSONObject/JSONArray input
+                // never converts to null; fall back to the raw text if it did.
+                return jsonToJs(context, parsed) ?: text
             } catch (ignored: Throwable) {
                 // fall through to raw text
             }
