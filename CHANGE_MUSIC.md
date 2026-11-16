@@ -117,3 +117,19 @@ name/singer/albumName/interval(mm:ss)/img/types/typeUrl 等洛雪标准字段。
   暂停）；无排行榜/歌单/我的页、无脚本导入 UI、无黑胶转盘动画（均为 v1 
   明确不做）。
 - 酷我歌词走 newlyric.lrc 直链，部分歌曲取不到时显示「暂无歌词」。
+
+## v1.7.1 修复（真机反馈：点歌不出声）
+
+- 根因：内置的星海 v2.3.0 已过期——它的备用接口被服务端废弃（返回
+  code 410「此接口已废弃，需提供 name 和 songmid 参数」），主接口
+  GDAPI 在稳定源列表不含 kg 时也走不通，所以所有歌都解析失败。
+- 换内置脚本：xinghai.js 升级为官网最新星海 v3.2.19（新接口契约
+  name+songmid）；已用 Node 搭洛雪宿主冒烟实测：inited 注册
+  wy/tx/kg/kw/mg/qs 六平台，kg《发如雪》成功解析出酷狗 CDN mp3 直链。
+- 备选脚本由长青SVIP v1.2.0（已被作者远程熔断）换成全豆要-聚合音源
+  v10.0（同样冒烟实测可 inited 且能解析出 kg 播放链接）。旧的
+  changqing.js 资源文件因推送工具不能删文件而留在 assets 里，
+  SCRIPTS 已不再引用，不会被加载。
+- 平台 chips 只显示能原生搜索的平台（kg/kw/tx/wy）：脚本还注册了
+  mg/qs 等无搜索实现的平台，显示出来只会搜出空列表。
+- MusicPage 顶部加状态栏 inset，修搜索框压到状态栏的问题。

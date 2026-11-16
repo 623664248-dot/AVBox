@@ -94,7 +94,12 @@ class MusicViewModel : ViewModel() {
     }
 
     private fun applyRegistry(registry: Map<String, LxBridge.SourceInfo>) {
-        val supported = registry.values.filter { it.actions.contains("musicUrl") }
+        // Only offer platforms MusicApi can actually search; the scripts also
+        // register sources like mg/qs that have no native search yet, and
+        // showing them would dead-end on an empty result list.
+        val supported = registry.values.filter {
+            it.actions.contains("musicUrl") && it.code in SEARCHABLE_SOURCES
+        }
         val ordered = supported.sortedBy { SOURCE_ORDER.indexOf(it.code).let { i -> if (i < 0) 99 else i } }
         _sources.value = ordered
         val current = _selectedSource.value
@@ -192,5 +197,6 @@ class MusicViewModel : ViewModel() {
     companion object {
         private const val KV_SCRIPT_ID = "lx_music_script_id"
         private val SOURCE_ORDER = listOf("kg", "kw", "tx", "wy", "mg")
+        private val SEARCHABLE_SOURCES = setOf("kg", "kw", "tx", "wy")
     }
 }

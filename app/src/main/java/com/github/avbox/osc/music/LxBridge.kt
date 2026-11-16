@@ -51,7 +51,7 @@ object LxBridge {
 
     val SCRIPTS: List<ScriptDef> = listOf(
         ScriptDef("xinghai", "lx_sources/xinghai.js", "星海音乐源"),
-        ScriptDef("changqing", "lx_sources/changqing.js", "长青SVIP音源"),
+        ScriptDef("quandouyao", "lx_sources/quandouyao.js", "全豆要聚合音源"),
     )
 
     data class ScriptInfo(
