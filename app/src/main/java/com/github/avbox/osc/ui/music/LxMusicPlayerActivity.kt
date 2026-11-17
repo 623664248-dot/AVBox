@@ -117,6 +117,9 @@ class LxMusicPlayerActivity : BaseActivity() {
         /** How long the first playAt waits for the connection attempt. */
         private const val SERVICE_CONNECT_WAIT_MS = 10000L
 
+        /** Overall budget of one cross-source fallback hunt. */
+        private const val FALLBACK_DEADLINE_MS = 40000L
+
         /** Rhythm-visualizer bar count (v1.20.0). */
         private const val VIZ_BARS = 28
 
@@ -179,6 +182,15 @@ class LxMusicPlayerActivity : BaseActivity() {
     private val state = LxPlayerState()
     private var player: ExoPlayer? = null
     private var resolveJob: Job? = null
+
+    /**
+     * Cross-source fallback bookkeeping (v1.22.0): the sources
+     * already tried for the song currently being rescued, keyed by
+     * that song's name|singer so a fresh song starts with a clean
+     * slate while retries of the same song keep hopping.
+     */
+    private val fallbackTried = mutableSetOf<String>()
+    private var fallbackSongKey: String = ""
     private var lyricJob: Job? = null
     private var tickerJob: Job? = null
     private var colorJob: Job? = null
@@ -259,6 +271,21 @@ class LxMusicPlayerActivity : BaseActivity() {
         override fun onPlayerError(error: PlaybackException) {
             state.buffering = false
             state.errorText = error.message ?: getString(R.string.music_resolve_failed)
+            // A stream that dies right after a successful resolve
+            // gets the same cross-source rescue as a resolve failure
+            // (v1.22.0); a successful rescue clears the error again.
+            // Skipped while a fresh resolve is in flight: that job
+            // owns the page (and runs its own rescue on failure),
+            // and a stale error from the previous item must not
+            // hijack the new song.
+            if (resolveJob?.isActive == true) return
+            val idx = state.index
+            val cur = state.current
+            if (cur != null) {
+                lifecycleScope.launch {
+                    startFallback(idx, cur)
+                }
+            }
         }
     }
 
@@ -550,6 +577,11 @@ class LxMusicPlayerActivity : BaseActivity() {
         state.index = index
         lastIndex = index
         val track = queue[index]
+        val songKey = track.name + "|" + track.singer
+        if (songKey != fallbackSongKey) {
+            fallbackSongKey = songKey
+            fallbackTried.clear()
+        }
         // Play history (v1.18.0): every real start through playAt is
         // recorded — fresh starts, prev/next and auto-advance alike.
         // The attach path (tryAttach) binds without calling playAt,
@@ -570,37 +602,19 @@ class LxMusicPlayerActivity : BaseActivity() {
         resolveJob?.cancel()
         resolveJob = lifecycleScope.launch {
             try {
-                val url: String
-                if (track.isPy) {
-                    // Py spider track: resolve through the shared spider
-                    // runtime (detail+playerContent, lazily per track) and
-                    // carry the spider's headers into the HTTP factory.
-                    val resolved = PyMusicBridge.resolve(
-                        this@LxMusicPlayerActivity,
-                        pyDefFor(track),
-                        track,
-                    )
-                    url = resolved.url
-                    currentHeaders = resolved.headers
-                    if (state.index == index) {
-                        state.currentUrl = url
-                        state.qualityText = ""
-                    }
-                } else {
-                    currentHeaders = emptyMap()
-                    url = LxBridge.getMusicUrl(track)
-                    if (state.index == index) {
-                        state.currentUrl = url
-                        state.qualityText = LxBridge.lastResolvedQuality()?.uppercase() ?: ""
-                    }
+                val url = resolveUrl(track, index)
+                if (url.isBlank()) {
+                    throw IllegalStateException(getString(R.string.music_resolve_failed))
                 }
                 startPlayback(track, url)
                 ensureEffects()
             } catch (e: PyMusicBridge.PyParseRequiredException) {
-                state.buffering = false
-                val message = getString(R.string.music_py_parse_unsupported)
-                state.errorText = message
-                Toast.makeText(this@LxMusicPlayerActivity, message, Toast.LENGTH_SHORT).show()
+                if (!startFallback(index, track)) {
+                    state.buffering = false
+                    val message = getString(R.string.music_py_parse_unsupported)
+                    state.errorText = message
+                    Toast.makeText(this@LxMusicPlayerActivity, message, Toast.LENGTH_SHORT).show()
+                }
             } catch (e: CancellationException) {
                 // Superseded by a newer play / attach / destroy: the
                 // cancellation IS the control flow, not a failure.
@@ -610,14 +624,200 @@ class LxMusicPlayerActivity : BaseActivity() {
                 // the page pointing at a player that never started.
                 throw e
             } catch (e: Exception) {
-                state.buffering = false
-                val message = e.message ?: getString(R.string.music_resolve_failed)
-                state.errorText = message
-                Toast.makeText(this@LxMusicPlayerActivity, message, Toast.LENGTH_SHORT).show()
+                if (!startFallback(index, track)) {
+                    state.buffering = false
+                    val message = e.message ?: getString(R.string.music_resolve_failed)
+                    state.errorText = message
+                    Toast.makeText(this@LxMusicPlayerActivity, message, Toast.LENGTH_SHORT).show()
+                }
             }
         }
         loadLyrics(track, index)
     }
+
+    /**
+     * Resolves [track]'s play URL through its own source: py spider
+     * tracks go through the shared spider runtime (detail +
+     * playerContent, lazily per track) and carry the spider's
+     * headers into [currentHeaders]; LX tracks go through the
+     * active script. Throws on failure. Shared by [playAt] and the
+     * cross-source fallback.
+     */
+    private suspend fun resolveUrl(track: MusicTrack, index: Int): String {
+        if (track.isPy) {
+            val resolved = PyMusicBridge.resolve(
+                this,
+                pyDefFor(track),
+                track,
+            )
+            currentHeaders = resolved.headers
+            if (state.index == index) {
+                state.currentUrl = resolved.url
+                state.qualityText = ""
+            }
+            return resolved.url
+        }
+        currentHeaders = emptyMap()
+        val url = LxBridge.getMusicUrl(track)
+        if (state.index == index) {
+            state.currentUrl = url
+            state.qualityText = LxBridge.lastResolvedQuality()?.uppercase() ?: ""
+        }
+        return url
+    }
+
+    // ------------------------------------------------- cross-source fallback
+
+    /**
+     * Cross-source rescue (v1.22.0, Torres: 不要在一棵树上吊死）:
+     * the song's own source failed to resolve or play, so the same
+     * song is hunted on the OTHER imported sources — the other py
+     * spiders and the other LX platforms — and the first version
+     * that resolves takes the failed track's place in the queue, so
+     * the page, history and next/prev follow the new source.
+     * Sources already tried for this song are skipped, so repeated
+     * failures keep hopping instead of looping. Returns true when a
+     * replacement is playing.
+     */
+    private suspend fun startFallback(index: Int, failed: MusicTrack): Boolean {
+        if (state.index != index) return false
+        fallbackTried += failed.source
+        state.buffering = true
+        val deadline = SystemClock.elapsedRealtime() + FALLBACK_DEADLINE_MS
+        val keyword = (failed.name + " " + failed.singer).trim()
+        for (step in fallbackSteps(failed)) {
+            if (state.index != index) return false
+            if (SystemClock.elapsedRealtime() > deadline) break
+            val candidate = try {
+                step(keyword)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            } ?: continue
+            if (candidate.source in fallbackTried) continue
+            fallbackTried += candidate.source
+            try {
+                val url = resolveUrl(candidate, index)
+                if (url.isBlank()) continue
+                if (index !in state.queue.indices) return false
+                state.queue = state.queue.toMutableList().also { it[index] = candidate }
+                state.sourceLabel = sourceLabelFor(candidate)
+                state.errorText = null
+                updateCoverColor(candidate)
+                LxPlayHistory.record(this, candidate)
+                startPlayback(candidate, url)
+                ensureEffects()
+                loadLyrics(candidate, index)
+                Toast.makeText(
+                    this,
+                    getString(
+                        R.string.music_fallback_switched,
+                        sourceLabelFor(failed),
+                        sourceLabelFor(candidate),
+                    ),
+                    Toast.LENGTH_LONG,
+                ).show()
+                MusicCrashLog.log(
+                    this,
+                    "fallback: ${failed.source} -> ${candidate.source} for ${failed.name}",
+                )
+                return true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // This candidate's source failed too; keep hopping.
+                continue
+            }
+        }
+        state.buffering = false
+        return false
+    }
+
+    /**
+     * The fallback hops for [failed], best prospects first: a py
+     * track tries the other py spiders before the LX platforms, an
+     * LX track the other platforms before the spiders. Each hop
+     * searches one source and yields its best same-song match.
+     */
+    private fun fallbackSteps(
+        failed: MusicTrack,
+    ): List<suspend (String) -> MusicTrack?> {
+        val lxSteps = listOf("kg", "kw", "wy", "tx")
+            .filter { it != failed.source }
+            .map { platform ->
+                suspend { kw: String ->
+                    bestMatch(failed, MusicApi.search(platform, kw, 1))
+                }
+            }
+        val pySteps = PyMusicSources.loadDefs(this)
+            .filter { def -> MusicTrack.PY_SOURCE_PREFIX + def.id != failed.source }
+            .map { def ->
+                suspend { kw: String ->
+                    bestMatch(failed, PyMusicBridge.search(this, def, kw, 1).items)
+                }
+            }
+        return if (failed.isPy) pySteps + lxSteps else lxSteps + pySteps
+    }
+
+    /** The result in [results] that is the same song as [want], or null. */
+    private fun bestMatch(want: MusicTrack, results: List<MusicTrack>): MusicTrack? {
+        var best: MusicTrack? = null
+        var bestScore = -1
+        for (got in results) {
+            val score = matchScore(want, got) ?: continue
+            if (score > bestScore) {
+                bestScore = score
+                best = got
+            }
+        }
+        return best
+    }
+
+    private fun matchScore(want: MusicTrack, got: MusicTrack): Int? {
+        val wantName = coreName(want.name)
+        val gotName = coreName(got.name)
+        if (wantName.isEmpty() || gotName.isEmpty()) return null
+        val nameScore = when {
+            wantName == gotName -> 3
+            wantName.contains(gotName) || gotName.contains(wantName) -> 2
+            else -> return null
+        }
+        if (!singerMatches(want.singer, got.singer)) return null
+        var score = nameScore * 10
+        if (want.durationSec > 0 && got.durationSec > 0 &&
+            Math.abs(want.durationSec - got.durationSec) <= 20
+        ) {
+            score += 2
+        }
+        return score
+    }
+
+    /** Song title stripped of brackets and qualifiers for comparison. */
+    private fun coreName(raw: String): String {
+        var s = raw.lowercase()
+        s = s.replace(Regex("[\\(\\[（【][^\\)\\]）】]*[\\)\\]）】]"), "")
+        return s.filter { !it.isWhitespace() && it !in "《》〈〉\"'“”‘’·-_" }
+    }
+
+    private fun singerMatches(want: String, got: String): Boolean {
+        if (want.isBlank() || got.isBlank()) return true
+        val wantParts = singerParts(want)
+        val gotParts = singerParts(got)
+        if (wantParts.isEmpty() || gotParts.isEmpty()) {
+            return normalizeSinger(want) == normalizeSinger(got)
+        }
+        return wantParts.intersect(gotParts).isNotEmpty()
+    }
+
+    private fun singerParts(raw: String): Set<String> =
+        raw.split('/', '、', ',', '&', '·')
+            .map { normalizeSinger(it) }
+            .filter { it.isNotEmpty() }
+            .toSet()
+
+    private fun normalizeSinger(raw: String): String =
+        raw.lowercase().filter { !it.isWhitespace() }
 
     /**
      * Lyrics load in parallel with playback and fill in when ready.
@@ -636,6 +836,9 @@ class LxMusicPlayerActivity : BaseActivity() {
                 MusicApi.lyric(track)
             }
             if (state.index != index) return@launch
+            // A cross-source fallback may have swapped this slot's
+            // track while the lyric was in flight; drop stale text.
+            if (state.current != track) return@launch
             if (!raw.isNullOrBlank()) {
                 state.lyricLines = MusicLrc.parse(raw)
             }

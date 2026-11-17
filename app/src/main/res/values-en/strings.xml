@@ -253,6 +253,7 @@
     <string name="music_empty_result">No songs found</string>
     <string name="music_no_lyric">No lyrics</string>
     <string name="music_resolve_failed">Failed to resolve the play URL</string>
+    <string name="music_fallback_switched">%1$s failed to play, switched to %2$s automatically</string>
     <string name="music_source_kg">Kugou</string>
     <string name="music_source_kw">Kuwo</string>
     <string name="music_source_tx">QQ Music</string>

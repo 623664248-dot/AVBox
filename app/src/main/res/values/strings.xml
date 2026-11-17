@@ -253,6 +253,7 @@
     <string name="music_empty_result">没有找到相关歌曲</string>
     <string name="music_no_lyric">暂无歌词</string>
     <string name="music_resolve_failed">播放链接解析失败</string>
+    <string name="music_fallback_switched">%1$s 播放失败，已自动切换到 %2$s</string>
     <string name="music_source_kg">酷狗</string>
     <string name="music_source_kw">酷我</string>
     <string name="music_source_tx">QQ音乐</string>
