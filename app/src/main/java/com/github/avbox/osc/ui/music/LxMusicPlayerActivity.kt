@@ -300,13 +300,18 @@ class LxMusicPlayerActivity : BaseActivity() {
     private var virtualizer: Virtualizer? = null
     private var effectsSessionId: Int = 0
 
-    // Rhythm visualizer (v1.20.0): an audiofx Visualizer riding the
-    // same audio session as the EQ, feeding FFT bar levels into the
-    // page state. Purely decorative — every step is guarded, and a
-    // device without visualizer support (or without the microphone
-    // permission the Visualizer API demands) simply shows no bars.
+    // Rhythm visualizer (v1.20.0): an audiofx Visualizer on the
+    // device output mix (session 0), feeding FFT bar levels into
+    // the page state. It used to ride the playing player's own
+    // audio session like the EQ, but on Torres's Honor that
+    // session's capture stayed silent for songs started from a
+    // list (v1.21.1/v1.21.2: bars rendered, always flat) while the
+    // output mix carries whatever is actually audible, whichever
+    // player or mode produced it. Purely decorative — every step
+    // is guarded, and a device without visualizer support (or
+    // without the microphone permission the Visualizer API
+    // demands) simply shows no bars.
     private var audioVisualizer: Visualizer? = null
-    private var vizSessionId: Int = 0
     private val vizBars = FloatArray(VIZ_BARS)
 
     private val vizPermissionLauncher =
@@ -1438,12 +1443,14 @@ class LxMusicPlayerActivity : BaseActivity() {
     }
 
     /**
-     * Creates (or re-creates, when the session changed) the rhythm
-     * visualizer for the player's current audio session and starts
-     * FFT capture into [LxPlayerState.vizLevels]. Called from
-     * [ensureEffects] so it follows the same lifecycle as the EQ.
-     * Requires RECORD_AUDIO; without the grant it stays off and the
-     * permission callback retries after a grant.
+     * Creates the rhythm visualizer on the output mix (session 0)
+     * and starts FFT capture into [LxPlayerState.vizLevels]. The
+     * mix needs no session bookkeeping, so once created it stays
+     * valid across track and mode changes; the page ticker calls
+     * this every 400 ms so a creation that raced device state is
+     * retried until it sticks. Requires RECORD_AUDIO; without the
+     * grant it stays off and the permission callback retries after
+     * a grant.
      */
     private fun ensureVisualizer() {
         if (ContextCompat.checkSelfPermission(
@@ -1453,13 +1460,9 @@ class LxMusicPlayerActivity : BaseActivity() {
         ) {
             return
         }
-        val sessionId = currentAudioSessionId()
-        if (sessionId <= 0) return
-        if (sessionId == vizSessionId && audioVisualizer != null) return
-        releaseVisualizer()
-        vizSessionId = sessionId
+        if (audioVisualizer != null) return
         try {
-            val viz = Visualizer(sessionId)
+            val viz = Visualizer(0)
             val captureSize = Visualizer.getCaptureSizeRange()[1]
             viz.captureSize = captureSize
             viz.setDataCaptureListener(
@@ -1484,9 +1487,13 @@ class LxMusicPlayerActivity : BaseActivity() {
             )
             viz.enabled = true
             audioVisualizer = viz
+            MusicCrashLog.log(this, "viz: output-mix visualizer on")
         } catch (t: Throwable) {
             audioVisualizer = null
-            vizSessionId = 0
+            MusicCrashLog.log(
+                this,
+                "viz: create failed ${t.javaClass.simpleName}: ${t.message}",
+            )
         }
     }
 
@@ -1533,7 +1540,6 @@ class LxMusicPlayerActivity : BaseActivity() {
         } catch (t: Throwable) {
         }
         audioVisualizer = null
-        vizSessionId = 0
         if (state.vizLevels.isNotEmpty()) {
             state.vizLevels = FloatArray(0)
         }

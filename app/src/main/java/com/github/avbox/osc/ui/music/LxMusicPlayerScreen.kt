@@ -58,12 +58,15 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -116,6 +119,13 @@ fun LxMusicPlayerScreen(
             onPrev = onPrev,
         )
     } else {
+    // 专辑图 with a cover on hand gets the reference player's
+    // poster treatment (v1.21.3): full-bleed poster over a
+    // blurred-cover backdrop, both drawn in the backdrop layer
+    // below; the Column's cover slot then stays empty.
+    val albumPoster = MusicAppearance.bgPath.isBlank() &&
+        MusicAppearance.coverStyle == MusicAppearance.COVER_ALBUM &&
+        track?.img != null
     Box(modifier = Modifier.fillMaxSize()) {
         // Kugou-style backdrop: a custom background image (v1.10.0
         // MusicBackground, blurred + dimmed) wins; otherwise the solid
@@ -123,6 +133,9 @@ fun LxMusicPlayerScreen(
         // blue-grey fallback and a soft bottom shade for readability.
         if (MusicAppearance.bgPath.isNotBlank()) {
             MusicBackground(fallbackModel = track?.img)
+        } else if (albumPoster) {
+            MusicBackground(fallbackModel = track?.img)
+            AlbumPosterArt(model = track?.img)
         } else {
             Box(
                 modifier = Modifier
@@ -235,11 +248,26 @@ fun LxMusicPlayerScreen(
                         buffering = state.buffering,
                         modifier = Modifier.fillMaxSize(),
                     )
-                    else -> AlbumCoverArt(
-                        track = track,
-                        buffering = state.buffering,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    else -> if (albumPoster) {
+                        // The poster lives in the backdrop layer;
+                        // this slot only centres the buffering
+                        // spinner (the tap target is the wrapping
+                        // box, unchanged).
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (state.buffering) {
+                                CircularProgressIndicator(color = Color.White)
+                            }
+                        }
+                    } else {
+                        AlbumCoverArt(
+                            track = track,
+                            buffering = state.buffering,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
             }
         }
@@ -663,6 +691,41 @@ private fun RhythmBars(levels: FloatArray) {
             )
         }
     }
+}
+
+/**
+ * The 专辑图 poster (v1.21.3, modelled on Torres's reference
+ * player): the cover as a full-bleed poster across the top of the
+ * page — edge to edge, under the status bar — with its bottom
+ * dissolving into the blurred-cover backdrop beneath it (an
+ * alpha-gradient mask, so what shows through is the same image,
+ * blurred). Drawn in the backdrop layer; the Column's cover slot
+ * stays empty in this style.
+ */
+@Composable
+private fun AlbumPosterArt(model: Any?) {
+    AsyncImage(
+        model = model,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        alignment = Alignment.TopCenter,
+        modifier = Modifier
+            .fillMaxWidth()
+            .fillMaxHeight(0.54f)
+            .graphicsLayer {
+                compositingStrategy = CompositingStrategy.Offscreen
+            }
+            .drawWithContent {
+                drawContent()
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0.58f to Color.Black,
+                        1f to Color.Transparent,
+                    ),
+                    blendMode = BlendMode.DstIn,
+                )
+            },
+    )
 }
 
 /** Cover style 专辑图 (v1.20.0): the original square album art. */
