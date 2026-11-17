@@ -740,23 +740,20 @@ private fun VinylDisc(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val c = center
             val r = size.minDimension / 2f
-            for (fraction in listOf(0.92f, 0.82f, 0.72f, 0.62f)) {
+            // Grooves as a dense, faint texture like a real record
+            // (v1.21.2): the first cut's four sparse rings read as
+            // target circles against the reference deck, and its
+            // bright light arc has no counterpart there — both gone.
+            var fraction = 0.60f
+            while (fraction <= 0.975f) {
                 drawCircle(
-                    color = Color.White.copy(alpha = 0.08f),
+                    color = Color.White.copy(alpha = 0.05f),
                     radius = r * fraction,
                     center = c,
-                    style = Stroke(width = 1.dp.toPx()),
+                    style = Stroke(width = 0.75.dp.toPx()),
                 )
+                fraction += 0.034f
             }
-            drawArc(
-                color = Color.White.copy(alpha = 0.28f),
-                startAngle = -40f,
-                sweepAngle = 70f,
-                useCenter = false,
-                style = Stroke(width = 2.dp.toPx()),
-                topLeft = Offset(c.x - r * 0.92f, c.y - r * 0.92f),
-                size = Size(r * 1.84f, r * 1.84f),
-            )
         }
         if (track?.img != null) {
             AsyncImage(
@@ -764,13 +761,13 @@ private fun VinylDisc(
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .fillMaxSize(0.52f)
+                    .fillMaxSize(0.46f)
                     .clip(CircleShape),
             )
         } else {
             Box(
                 modifier = Modifier
-                    .fillMaxSize(0.52f)
+                    .fillMaxSize(0.46f)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primary),
                 contentAlignment = Alignment.Center,
@@ -897,7 +894,7 @@ private fun TurntableCoverArt(
         VinylDisc(
             track = track,
             playing = playing,
-            modifier = Modifier.fillMaxSize(0.90f),
+            modifier = Modifier.fillMaxSize(0.82f),
         )
         Tonearm(playing = playing, modifier = Modifier.fillMaxSize())
         // Left-edge details: the slim slider and the power dot.

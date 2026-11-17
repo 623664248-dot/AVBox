@@ -402,6 +402,15 @@ class LxMusicPlayerActivity : BaseActivity() {
                     val duration = target.duration
                     if (duration > 0) state.durationMs = duration
                 }
+                // The visualizer's setup calls race the audio
+                // session: a song started from a list hands over to
+                // the service player whose session id may not exist
+                // yet at playAt time (or the playback target switches
+                // afterwards), and nothing retried — the bars stayed
+                // flat for the whole song (Torres, v1.21.1). The
+                // check is idempotent and cheap, so the ticker keeps
+                // it healed.
+                ensureVisualizer()
                 checkSleepTimer()
                 delay(400)
             }
