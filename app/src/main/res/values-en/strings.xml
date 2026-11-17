@@ -246,6 +246,7 @@
     <string name="music_py_import_failed">Failed to import py source: %1$s</string>
     <string name="music_py_back_category">Back to categories</string>
     <string name="music_py_choose_episode">Choose episode</string>
+    <string name="music_py_episode_count">%1$d songs</string>
     <string name="music_py_source_missing">Py source not found</string>
     <string name="music_py_fallback">Py source</string>
     <string name="music_sleep_timer">Sleep timer</string>

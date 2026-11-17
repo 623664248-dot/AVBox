@@ -31,19 +31,20 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -156,12 +157,21 @@ fun MusicPage(
     val pySearchActive by vm.pySearchActive.collectAsStateWithLifecycle()
     val pyDetailLoading by vm.pyDetailLoading.collectAsStateWithLifecycle()
     val pendingPyPlay by vm.pendingPyPlay.collectAsStateWithLifecycle()
-    val episodePicker by vm.episodePicker.collectAsStateWithLifecycle()
+    val episodePage by vm.episodePage.collectAsStateWithLifecycle()
 
     var query by rememberSaveable { mutableStateOf("") }
     var scriptDialogOpen by remember { mutableStateOf(false) }
     var appearanceOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+
+    // Spider category list/grid scroll states are hoisted here,
+    // above the content branch chain: the episode page and the
+    // overlays replace PySpiderContent in composition, and states
+    // remembered inside it would be dropped — returning from an
+    // episode list must restore the category list exactly where
+    // the user left it (v1.18.1).
+    val pyListState = rememberLazyListState()
+    val pyGridState = rememberLazyGridState()
 
     // After a pick, the import runs in the ViewModel and its result
     // toasts arrive through the page-level messages flow below, so
@@ -384,6 +394,11 @@ fun MusicPage(
                 vm.closeOverlay()
             }
 
+            BackHandler(enabled = episodePage != null && listOverlay == null) {
+                vm.closeEpisodePage()
+            }
+
+            val episodePageState = episodePage
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -422,6 +437,20 @@ fun MusicPage(
                             )
                         },
                     )
+                } else if (episodePageState != null) {
+                    // A multi-episode spider vod (a singer, an album,
+                    // a playlist) opens here as a full-screen list
+                    // (v1.18.1) instead of the old picker dialog: the
+                    // rows play through the same ViewModel call the
+                    // dialog used, and closing the page returns to
+                    // the category list exactly as it was left (its
+                    // items live in the ViewModel, nothing reloads).
+                    PyEpisodeListContent(
+                        title = episodePageState.title,
+                        episodes = episodePageState.episodes,
+                        onClose = { vm.closeEpisodePage() },
+                        onPlay = { index -> vm.playEpisode(index) },
+                    )
                 } else if (noSource) {
                     // No user source imported yet: the bridge never
                     // inits and every list call safely returns empty,
@@ -440,6 +469,8 @@ fun MusicPage(
                         items = pyItems,
                         loading = pyLoading,
                         loadingMore = pyLoadingMore,
+                        listState = pyListState,
+                        gridState = pyGridState,
                         searchActive = pySearchActive,
                         singerGrid = !pySearchActive &&
                             pyClasses.firstOrNull { it.id == selectedPyClass }
@@ -783,54 +814,6 @@ fun MusicPage(
         )
     }
 
-    val picker = episodePicker
-    if (picker != null) {
-        AVBoxAlertDialog(
-            onDismissRequest = { vm.dismissEpisodePicker() },
-            title = { Text(picker.title) },
-            text = {
-                Column {
-                    Text(
-                        text = stringResource(R.string.music_py_choose_episode),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 8.dp),
-                    )
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 420.dp),
-                    ) {
-                        itemsIndexed(
-                            picker.episodes,
-                            key = { index, _ -> index },
-                        ) { index, episode ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { vm.playEpisode(index) }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = episode.name,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { vm.dismissEpisodePicker() }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            },
-        )
-    }
 }
 
 /** One icon + label action row of the top-right multi-function menu. */
@@ -925,6 +908,73 @@ private fun MusicOverlayList(
     }
 }
 
+/**
+ * Full-screen episode list of a multi-episode spider vod (a singer,
+ * an album, a playlist), rendered instead of the category content
+ * (v1.18.1; this used to be a cramped picker dialog capped at
+ * 420dp). The header is a back button, the vod's title and the
+ * episode count; the rows keep the dialog's shape (episode name,
+ * tap to play) and play through the same ViewModel call, so the
+ * episode list becomes the queue exactly as it did from the dialog.
+ */
+@Composable
+private fun PyEpisodeListContent(
+    title: String,
+    episodes: List<MusicTrack>,
+    onClose: () -> Unit,
+    onPlay: (Int) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onClose) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_arrow_left),
+                    contentDescription = stringResource(R.string.music_py_back_category),
+                )
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = stringResource(R.string.music_py_episode_count, episodes.size),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 16.dp),
+        ) {
+            itemsIndexed(
+                episodes,
+                key = { index, _ -> index },
+            ) { index, episode ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPlay(index) }
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = episode.name,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
 /** One selectable row in the source dialog (JS script or py spider). */
 @Composable
 private fun ScriptOptionRow(
@@ -999,14 +1049,18 @@ private fun PySpiderContent(
     items: List<MusicTrack>,
     loading: Boolean,
     loadingMore: Boolean,
+    listState: LazyListState,
+    gridState: LazyGridState,
     searchActive: Boolean,
     singerGrid: Boolean,
     onClearSearch: () -> Unit,
     onLoadMore: () -> Unit,
     onItemClick: (MusicTrack) -> Unit,
 ) {
-    val listState = rememberLazyListState()
-    val gridState = rememberLazyGridState()
+    // The scroll states are parameters, hoisted into MusicPage:
+    // this content leaves composition while the episode page is
+    // open, and internally remembered states would reset the
+    // category list's scroll position on return (v1.18.1).
     // A reset load (category switch, re-tap of the current category,
     // a fresh search, leaving search results) raises `loading` first:
     // park the visible container back at the top so the refreshed
@@ -1156,7 +1210,7 @@ private fun PySpiderContent(
  * One cell of the singer grid: a round cover (the same img field the
  * list rows use) over a centered one-line name. Taps go through the
  * same handler as the list rows, so singer vods follow the usual
- * episode-picker / direct-play flow.
+ * episode-list / direct-play flow.
  */
 @Composable
 private fun PySingerCell(track: MusicTrack, onClick: () -> Unit) {

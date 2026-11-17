@@ -1479,3 +1479,31 @@ Torres 试 v1.17.0 录屏后的三点反馈，全部在 MusicPage.kt。
   音源）、music_import_unknown（无法识别这个文件）。
   收藏与外观的菜单文案复用既有 music_favorites_title /
   music_appearance，未新增。
+
+
+## v1.18.1 — py 多集 vod 改全屏选集页
+
+- 背景：py 模式点开多集 vod（歌手 / 专辑 / 歌单，如爱听音乐的
+  歌手）时，原来是「选择剧集」弹窗（列表最高 420dp），歌一多
+  就得在小窗里翻。Torres 要求点进去就是整页列表。
+- 改动：弹窗删除，改为全屏页（与 v1.18.0 的 MusicOverlayList
+  同一种内容区分支形态）：顶栏 = 返回按钮（ic_arrow_left）+
+  vod 标题 + 歌曲数（新串 music_py_episode_count，×4 语言）；
+  下面整页 LazyColumn，行样式与原弹窗一致（集名 bodyLarge、
+  上下 10dp、点按播放）。
+- 状态仍在 MusicViewModel：PyEpisodePicker 改名 PyEpisodePage
+  （_episodePage / episodePage），onPyTrackClick 多集时置位、
+  closeEpisodePage 清除；播放路径一字未动——点行仍调
+  playEpisode(index)，以整份集列表为队列走 _pendingPyPlay。
+  单集 vod 仍直播放。取集期间的加载态不变（分类列表上居中
+  转圈 pyDetailLoading），集数据到达才切到全屏页。
+- 返回：顶栏返回按钮 + 系统返回键（BackHandler，菜单 overlay
+  打开时让位给 overlay 的返回）。底下的分类列表数据全在
+  ViewModel 里，返回不重新请求、不重载。
+- 滚动位置：分类列表 / 歌手网格的 LazyListState /
+  LazyGridState 已上提到 MusicPage 持有（作为参数传入
+  PySpiderContent），全屏选集页打开期间 PySpiderContent 离开
+  组合也不会丢，从选集页返回时分类列表的滚动位置保持不变。
+- 范围：选集流程只存在于 py 模式（episodePage 只在
+  onPyTrackClick 里置位），JS 模式未触碰。旧字符串
+  music_py_choose_episode 资源保留未删，页面不再引用。

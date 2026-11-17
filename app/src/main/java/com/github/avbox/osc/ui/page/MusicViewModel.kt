@@ -60,8 +60,11 @@ class MusicViewModel : ViewModel() {
         val index: Int,
     )
 
-    /** Episode choice for a multi-episode (album/playlist) py vod. */
-    data class PyEpisodePicker(
+    /**
+     * Episodes of a multi-episode (album/playlist) py vod, shown as
+     * a full-screen list page (v1.18.1; a picker dialog before).
+     */
+    data class PyEpisodePage(
         val title: String,
         val episodes: List<MusicTrack>,
     )
@@ -157,8 +160,8 @@ class MusicViewModel : ViewModel() {
     private val _pendingPyPlay = MutableStateFlow<PyPlayRequest?>(null)
     val pendingPyPlay: StateFlow<PyPlayRequest?> = _pendingPyPlay.asStateFlow()
 
-    private val _episodePicker = MutableStateFlow<PyEpisodePicker?>(null)
-    val episodePicker: StateFlow<PyEpisodePicker?> = _episodePicker.asStateFlow()
+    private val _episodePage = MutableStateFlow<PyEpisodePage?>(null)
+    val episodePage: StateFlow<PyEpisodePage?> = _episodePage.asStateFlow()
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
@@ -659,8 +662,8 @@ class MusicViewModel : ViewModel() {
     /**
      * A tap on a spider list row: one-episode vods play directly with the
      * current list as the queue (each row resolves lazily at its turn);
-     * multi-episode vods (albums/playlists) open the episode picker and
-     * the chosen episode list becomes the queue.
+     * multi-episode vods (albums/playlists) open the full-screen episode
+     * list and the chosen episode list becomes the queue.
      */
     fun onPyTrackClick(track: MusicTrack) {
         val def = currentPyDef ?: return
@@ -677,7 +680,7 @@ class MusicViewModel : ViewModel() {
                     }
                     _pendingPyPlay.value = PyPlayRequest(queue, if (index >= 0) index else 0)
                 } else {
-                    _episodePicker.value = PyEpisodePicker(track.name, episodes)
+                    _episodePage.value = PyEpisodePage(track.name, episodes)
                 }
             } catch (e: Exception) {
                 _messages.tryEmit(str(R.string.music_py_load_failed, e.message ?: ""))
@@ -691,14 +694,14 @@ class MusicViewModel : ViewModel() {
         _pendingPyPlay.value = null
     }
 
-    fun dismissEpisodePicker() {
-        _episodePicker.value = null
+    fun closeEpisodePage() {
+        _episodePage.value = null
     }
 
     fun playEpisode(index: Int) {
-        val picker = _episodePicker.value ?: return
-        _episodePicker.value = null
-        _pendingPyPlay.value = PyPlayRequest(picker.episodes, index)
+        val page = _episodePage.value ?: return
+        _episodePage.value = null
+        _pendingPyPlay.value = PyPlayRequest(page.episodes, index)
     }
 
     private fun selectedScriptId(): String =
