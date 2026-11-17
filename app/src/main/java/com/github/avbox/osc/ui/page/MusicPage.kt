@@ -84,6 +84,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -93,6 +94,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -198,6 +200,18 @@ fun MusicPage(
             if (message.isNotEmpty()) {
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    // Kuwo's chart APIs reject unsigned requests, so its catalog is
+    // always empty: in charts mode the 酷我 chip is hidden below (its
+    // search still works in search mode). If 酷我 was the selected
+    // platform when charts mode is entered, fall back to the first
+    // remaining platform through the normal select path, which also
+    // reloads the catalog (v1.17.2).
+    LaunchedEffect(mode, sources, selectedSource) {
+        if (mode == MusicMode.CHARTS && selectedSource == "kw") {
+            sources.firstOrNull { it.code != "kw" }?.let { vm.selectSource(it.code) }
         }
     }
 
@@ -314,7 +328,14 @@ fun MusicPage(
                             )
                         }
                     } else {
-                        items(sources, key = { it.code }) { source ->
+                        // Charts mode hides the 酷我 chip (see the
+                        // fallback effect above); search mode keeps it.
+                        val chipSources = if (mode == MusicMode.CHARTS) {
+                            sources.filter { it.code != "kw" }
+                        } else {
+                            sources
+                        }
+                        items(chipSources, key = { it.code }) { source ->
                             FilterChip(
                                 selected = source.code == selectedSource,
                                 onClick = { vm.selectSource(source.code) },
@@ -1533,6 +1554,21 @@ private fun MusicChartCard(chart: MusicChart, onClick: () -> Unit) {
             Color.Transparent
         },
     ) {
+        // Uniform card height (v1.17.2): the name block always reserves
+        // exactly two lines of bodyMedium and the update-tip block
+        // always reserves exactly one line of bodySmall — even when the
+        // tip is empty — so every card in the 2-column grid measures
+        // the same height and no row measurement can clip a card's
+        // last text line mid-glyph.
+        val density = LocalDensity.current
+        val nameBlockHeight = with(density) {
+            val lineHeight = MaterialTheme.typography.bodyMedium.lineHeight
+            if (lineHeight.isSpecified) lineHeight.toDp() * 2 else 40.dp
+        }
+        val tipBlockHeight = with(density) {
+            val lineHeight = MaterialTheme.typography.bodySmall.lineHeight
+            if (lineHeight.isSpecified) lineHeight.toDp() else 16.dp
+        }
         Column(modifier = Modifier.fillMaxWidth()) {
             AsyncImage(
                 model = chart.cover,
@@ -1548,26 +1584,28 @@ private fun MusicChartCard(chart: MusicChart, onClick: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(
-                    top = 6.dp,
-                    start = if (hasBg) 8.dp else 0.dp,
-                    end = if (hasBg) 8.dp else 0.dp,
-                ),
-            )
-            if (chart.updateTip.isNotEmpty()) {
-                Text(
-                    text = chart.updateTip,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(
+                modifier = Modifier
+                    .padding(
+                        top = 6.dp,
                         start = if (hasBg) 8.dp else 0.dp,
                         end = if (hasBg) 8.dp else 0.dp,
-                        bottom = if (hasBg) 8.dp else 0.dp,
-                    ),
-                )
-            }
+                    )
+                    .height(nameBlockHeight),
+            )
+            Text(
+                text = chart.updateTip,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .padding(
+                        start = if (hasBg) 8.dp else 0.dp,
+                        end = if (hasBg) 8.dp else 0.dp,
+                    )
+                    .height(tipBlockHeight),
+            )
+            Spacer(Modifier.height(8.dp))
         }
     }
 }

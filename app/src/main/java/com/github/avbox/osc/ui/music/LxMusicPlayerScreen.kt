@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
@@ -49,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -621,6 +623,49 @@ private fun ProgressRow(
                 activeTrackColor = Color.White,
                 inactiveTrackColor = Color.White.copy(alpha = 0.35f),
             ),
+            // Custom thumb/track (v1.17.2): the default M3 thumb is a
+            // tall vertical pill that dwarfs this thin progress row, so
+            // the thumb is a small round dot and the track is a hand-
+            // drawn 4dp rounded bar (solid white up to the playhead,
+            // translucent white beyond it).
+            thumb = {
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .shadow(2.dp, CircleShape)
+                        .background(Color.White, CircleShape),
+                )
+            },
+            track = { sliderState ->
+                val range = sliderState.valueRange
+                val span = range.endInclusive - range.start
+                val trackFraction = if (span > 0f) {
+                    ((sliderState.value - range.start) / span).coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(Color.White.copy(alpha = 0.35f)),
+                    )
+                    if (trackFraction > 0f) {
+                        Box(
+                            modifier = Modifier
+                                .width(maxWidth * trackFraction)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(Color.White),
+                        )
+                    }
+                }
+            },
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 8.dp),
