@@ -479,7 +479,13 @@ class MusicViewModel : ViewModel() {
 
     fun selectPyClass(typeId: String) {
         if (!_pyActive.value) return
-        if (typeId == _selectedPyClass.value && !_pySearchActive.value) return
+        if (typeId == _selectedPyClass.value && !_pySearchActive.value) {
+            // Re-tapping the already selected category refreshes it
+            // from page 1 (v1.15.2); the page scrolls the list back
+            // to the top when the reset load starts.
+            loadPyList(reset = true)
+            return
+        }
         _selectedPyClass.value = typeId
         _pySearchActive.value = false
         pyKeyword = ""

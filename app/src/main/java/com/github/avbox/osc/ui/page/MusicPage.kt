@@ -37,10 +37,14 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -411,6 +415,9 @@ fun MusicPage(
                         loading = pyLoading,
                         loadingMore = pyLoadingMore,
                         searchActive = pySearchActive,
+                        singerGrid = !pySearchActive &&
+                            pyClasses.firstOrNull { it.id == selectedPyClass }
+                                ?.name?.contains("歌手") == true,
                         onClearSearch = { vm.pyClearSearch() },
                         onLoadMore = { vm.pyLoadMore() },
                         onItemClick = { track -> vm.onPyTrackClick(track) },
@@ -807,7 +814,9 @@ private fun ScriptOptionRow(
  * selected category feed or the search results, paged by scrolling
  * like the native search list. Rows reuse [MusicTrackRow]: cover,
  * name and remarks (singer) come from the vod fields the bridge
- * mapped onto the track.
+ * mapped onto the track. A singer category (its name contains 歌手)
+ * outside search renders as a round-avatar grid instead (v1.15.2,
+ * [singerGrid]); taps still go through the same [onItemClick].
  */
 @Composable
 private fun PySpiderContent(
@@ -815,10 +824,27 @@ private fun PySpiderContent(
     loading: Boolean,
     loadingMore: Boolean,
     searchActive: Boolean,
+    singerGrid: Boolean,
     onClearSearch: () -> Unit,
     onLoadMore: () -> Unit,
     onItemClick: (MusicTrack) -> Unit,
 ) {
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    // A reset load (category switch, re-tap of the current category,
+    // a fresh search, leaving search results) raises `loading` first:
+    // park the visible container back at the top so the refreshed
+    // first page is seen from its start. Load-more runs on
+    // `loadingMore` and never trips this.
+    LaunchedEffect(loading) {
+        if (loading) {
+            if (singerGrid) {
+                gridState.scrollToItem(0)
+            } else {
+                listState.scrollToItem(0)
+            }
+        }
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         if (searchActive) {
             Row(
@@ -851,33 +877,72 @@ private fun PySpiderContent(
                 }
 
                 items.isNotEmpty() -> {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 16.dp),
-                    ) {
-                        itemsIndexed(
-                            items,
-                            key = { index, _ -> index },
-                        ) { index, track ->
-                            if (index >= items.size - 5) {
-                                LaunchedEffect(index) { onLoadMore() }
+                    if (singerGrid) {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
+                            state = gridState,
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp),
+                        ) {
+                            itemsIndexed(
+                                items,
+                                key = { index, _ -> index },
+                            ) { index, track ->
+                                if (index >= items.size - 5) {
+                                    LaunchedEffect(index) { onLoadMore() }
+                                }
+                                PySingerCell(
+                                    track = track,
+                                    onClick = { onItemClick(track) },
+                                )
                             }
-                            MusicTrackRow(
-                                track = track,
-                                onClick = { onItemClick(track) },
-                            )
+                            if (loadingMore) {
+                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                        )
+                                    }
+                                }
+                            }
                         }
-                        if (loadingMore) {
-                            item {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(24.dp),
-                                    )
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(bottom = 16.dp),
+                        ) {
+                            itemsIndexed(
+                                items,
+                                key = { index, _ -> index },
+                            ) { index, track ->
+                                if (index >= items.size - 5) {
+                                    LaunchedEffect(index) { onLoadMore() }
+                                }
+                                MusicTrackRow(
+                                    track = track,
+                                    onClick = { onItemClick(track) },
+                                )
+                            }
+                            if (loadingMore) {
+                                item {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -894,6 +959,43 @@ private fun PySpiderContent(
                 }
             }
         }
+    }
+}
+
+/**
+ * One cell of the singer grid: a round cover (the same img field the
+ * list rows use) over a centered one-line name. Taps go through the
+ * same handler as the list rows, so singer vods follow the usual
+ * episode-picker / direct-play flow.
+ */
+@Composable
+private fun PySingerCell(track: MusicTrack, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        AsyncImage(
+            model = track.img,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(CircleShape),
+        )
+        Text(
+            text = track.name,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp),
+        )
     }
 }
 

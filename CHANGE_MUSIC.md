@@ -1009,3 +1009,44 @@ degradeToLocal 本会话永不重试，于是每次都落成本地播放。
    上方，有一小段间隔。
 5. 若仍无通知/不能后台：把 Android/data/com.github.avbox.osc/
    files/music_crash.log 发回，按 connect/degrade 行定位。
+
+## v1.15.2 py 歌手分类平铺网格 + 分类再点回顶部
+
+Torres 对比 OK影视（同一爱听 py 爬虫当普通站点打开）指出：
+OK影视里「歌手」分类是平铺网格，音乐页 py 模式却渲染成歌曲式
+列表行。本版只动 MusicPage / MusicViewModel，两项：
+
+### 歌手分类改网格
+
+- 判定（页面层由 VM 状态派生，PySpiderContent 只渲染）：py 模式、
+  非搜索状态（pySearchActive 为假）、当前选中分类名包含「歌手」
+  （歌手 / 歌手分类 / 歌手大全等）时，pyItems 改用
+  LazyVerticalGrid 渲染；其余分类、py 搜索结果、JS 模式保持
+  列表行不变，收藏模式与 py 无关、未动。
+- 网格：3 列，格间距横竖 12dp、contentPadding top 8 / bottom 16，
+  与榜单网格惯例一致。每格 = 圆形封面（AsyncImage + CircleShape，
+  取 track.img，与列表行同一字段）+ 居中一行名字（超长省略）。
+- 点击格子与点击列表行共用 onPyTrackClick：多集 vod 走既有选集
+  弹层、单曲直接播，队列仍是当前列表，未另写一套。
+- 加载更多与列表行同一触发：index 进入末尾 5 个时调
+  pyLoadMore()；loadingMore 时网格底部跨整行显示转圈；首屏
+  loading 与空状态沿用原有分支。
+
+### 分类 chip 再点一次回顶部并刷新
+
+- selectPyClass：已选中同一分类且非搜索状态时，不再直接
+  return，改为 loadPyList(reset = true) 从第一页重新加载
+  （搜索状态下点当前分类的原有路径不变；JS 模式的平台 chip
+  不在本项范围）。
+- MusicPage：PySpiderContent 为行/格两个容器各持一个
+  LazyListState / LazyGridState，LaunchedEffect 以 _pyLoading
+  由假变真为触发，对当前可见容器 scrollToItem(0)；loadMore 走
+  _pyLoadingMore，不会误滚。JS 模式的列表未动。
+
+### 真机验证点
+
+1. 爱听音乐「歌手」：平铺 3 列圆形头像 + 名字；点某个歌手能进
+   他的歌曲列表/选集并播放。
+2. 其他分类（TOP榜单/新歌榜/电台等）与 py 搜索结果仍是列表行。
+3. 在任意长列表滑到中间，再点一次当前选中的分类 chip：列表
+   回到顶部并从第一页刷新。
