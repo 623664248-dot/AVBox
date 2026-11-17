@@ -385,7 +385,7 @@ fun MusicPage(
                         searchActive = pySearchActive,
                         singerGrid = !pySearchActive &&
                             pyClasses.firstOrNull { it.id == selectedPyClass }
-                                ?.name?.contains("歌手") == true,
+                                ?.name?.let(::isSingerClassName) == true,
                         onClearSearch = { vm.pyClearSearch() },
                         onLoadMore = { vm.pyLoadMore() },
                         onItemClick = { track -> vm.onPyTrackClick(track) },
@@ -787,6 +787,31 @@ private fun ScriptOptionRow(
  * outside search renders as a round-avatar grid instead (v1.15.2,
  * [singerGrid]); taps still go through the same [onItemClick].
  */
+/**
+ * Whether a spider-mode class lists singers (rendered as the
+ * round-avatar grid) rather than songs or playlists (list rows).
+ * Beyond the obvious 歌手/艺人 names, some sources — the imported
+ * Kuwo spider is the known case — group their singer classes by
+ * region and gender instead （华语男 / 华语女 / 华语组合 / 日韩 …),
+ * so those exact names and the region+group pattern count too.
+ * Song and playlist classes （听歌模式 / 发现 / 新歌榜 / 电台 …)
+ * match none of the three rules and stay list-rendered.
+ */
+private fun isSingerClassName(name: String): Boolean {
+    if (name.contains("歌手") || name.contains("艺人")) return true
+    val trimmed = name.trim()
+    if (trimmed in SINGER_CLASS_EXACT_NAMES) return true
+    return SINGER_CLASS_PATTERN.matches(trimmed)
+}
+
+private val SINGER_CLASS_EXACT_NAMES = setOf(
+    "华语男", "华语女", "华语组合", "日韩", "欧美",
+    "内地男", "内地女", "港台男", "港台女", "男歌手", "女歌手",
+)
+
+private val SINGER_CLASS_PATTERN =
+    Regex("^(华语|内地|港台|大陆|日韩|日本|韩国|欧美)(男|女|组合|乐队|团体)$")
+
 @Composable
 private fun PySpiderContent(
     items: List<MusicTrack>,
@@ -859,7 +884,15 @@ private fun PySpiderContent(
                                 items,
                                 key = { index, _ -> index },
                             ) { index, track ->
-                                if (index >= items.size - 5) {
+                                // Load-more only once the user has
+                                // actually scrolled: without the gate,
+                                // a short first page composes every
+                                // tail item at once and chains page
+                                // 2, 3, … spider calls on entry.
+                                if (index >= items.size - 5 &&
+                                    (gridState.firstVisibleItemIndex > 0 ||
+                                        gridState.firstVisibleItemScrollOffset > 0)
+                                ) {
                                     LaunchedEffect(index) { onLoadMore() }
                                 }
                                 PySingerCell(
@@ -892,7 +925,13 @@ private fun PySpiderContent(
                                 items,
                                 key = { index, _ -> index },
                             ) { index, track ->
-                                if (index >= items.size - 5) {
+                                // Same scroll gate as the singer grid
+                                // above: no chained page fetches while
+                                // the user is still at the top.
+                                if (index >= items.size - 5 &&
+                                    (listState.firstVisibleItemIndex > 0 ||
+                                        listState.firstVisibleItemScrollOffset > 0)
+                                ) {
                                     LaunchedEffect(index) { onLoadMore() }
                                 }
                                 MusicTrackRow(
@@ -1005,8 +1044,8 @@ private fun TopRoundButton(
  * round-button shell. On API 28+ it shows Torres's neon vinyl GIF
  * (shipped as the base64 text resource res/raw/vinyl_neon.b64 and
  * materialised to a cache file at runtime — see [VinylGifDisc]) as
- * an animated drawable; older systems keep the self-drawn rotating
- * disc ([VinylCanvasDisc]). Tapping
+ * an animated drawable filling the whole button; older systems
+ * keep the self-drawn rotating disc ([VinylCanvasDisc]). Tapping
  * opens the same source dialog the removed floating button used to
  * open. [playing] only drives the fallback disc's speed now.
  */
@@ -1029,21 +1068,23 @@ private fun VinylSourceButton(
 }
 
 /**
- * The neon vinyl GIF as a circular, animated disc. The GIF ships as
- * a base64 text resource (res/raw/vinyl_neon.b64) because this
- * repo's push channel accepts text files only; on first use
- * [materialiseVinylGif] decodes it to a real file in the cache dir
- * and ImageDecoder decodes from there, so the system hands back an
- * AnimatedImageDrawable, which is started on creation and stopped
- * when the view leaves composition. Any failure (resource, base64
- * or decode) leaves the round shell empty rather than crashing
- * the page.
+ * The neon vinyl GIF as a circular, animated disc. It fills the
+ * whole 40dp round button edge to edge (Torres: the earlier 30dp
+ * rendering left a visible ring of shell background around it).
+ * The GIF ships as a base64 text resource (res/raw/vinyl_neon.b64)
+ * because this repo's push channel accepts text files only; on
+ * first use [materialiseVinylGif] decodes it to a real file in the
+ * cache dir and ImageDecoder decodes from there, so the system
+ * hands back an AnimatedImageDrawable, which is started on
+ * creation and stopped when the view leaves composition. Any
+ * failure (resource, base64 or decode) leaves the round shell
+ * empty rather than crashing the page.
  */
 @Composable
 private fun VinylGifDisc() {
     AndroidView(
         modifier = Modifier
-            .size(30.dp)
+            .size(40.dp)
             .clip(CircleShape),
         factory = { ctx ->
             ImageView(ctx).apply {
