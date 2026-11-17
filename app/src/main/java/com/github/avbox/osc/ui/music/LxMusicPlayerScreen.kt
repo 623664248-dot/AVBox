@@ -39,10 +39,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -602,6 +604,17 @@ private fun ProgressRow(
     val duration = state.durationMs.coerceAtLeast(1L)
     val fraction = seekFraction
         ?: (state.positionMs.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+    // This material3 version only offers the thumb/track slots on the
+    // state-based Slider overload, so the slider owns a SliderState.
+    // While the user is not dragging it is kept in sync with playback
+    // progress; during a drag onValueChange drives seekFraction, so
+    // the sync target equals the state's own value (no fight).
+    val sliderState = remember {
+        SliderState(value = fraction, valueRange = 0f..1f)
+    }
+    SideEffect {
+        sliderState.value = fraction
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -612,7 +625,7 @@ private fun ProgressRow(
             color = Color.White.copy(alpha = 0.75f),
         )
         Slider(
-            value = fraction,
+            state = sliderState,
             onValueChange = { seekFraction = it },
             onValueChangeFinished = {
                 seekFraction?.let { onSeek((it * duration).toLong()) }
@@ -636,14 +649,9 @@ private fun ProgressRow(
                         .background(Color.White, CircleShape),
                 )
             },
-            track = { sliderState ->
-                val range = sliderState.valueRange
-                val span = range.endInclusive - range.start
-                val trackFraction = if (span > 0f) {
-                    ((sliderState.value - range.start) / span).coerceIn(0f, 1f)
-                } else {
-                    0f
-                }
+            track = { st ->
+                // valueRange is 0f..1f, so st.value IS the fraction.
+                val trackFraction = st.value.coerceIn(0f, 1f)
                 BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxWidth()
