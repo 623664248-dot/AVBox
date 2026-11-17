@@ -279,6 +279,7 @@
     <string name="music_favorites_empty">No favourites yet</string>
     <string name="music_menu_more">More</string>
     <string name="music_menu_history">Play history</string>
+    <string name="music_play_all">Play all</string>
     <string name="music_history_empty">No play history yet</string>
     <string name="music_history_clear">Clear</string>
     <string name="music_import_entry">Import source</string>

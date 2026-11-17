@@ -20,20 +20,25 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Music tab content mode: platform search, per-platform charts, favourites. */
-enum class MusicMode { SEARCH, CHARTS, FAVORITES }
+/** Music tab content mode: platform search, per-platform charts. */
+enum class MusicMode { SEARCH, CHARTS }
 
 /**
- * A list shown instead of the mode content, opened from the top-row
- * multi-function menu. Favourites need this in spider mode (the mode
- * row is hidden there, so the FAVORITES mode is unreachable); history
- * uses it in both modes instead of growing a fourth mode chip.
+ * A full-screen list page opened from the top-right multi-function
+ * ball (v1.19.0): favourites and play history. Both used to render
+ * inside the music content area (favourites as a mode in native
+ * mode, as an overlay in spider mode); since v1.19.0 they are
+ * whole-screen pages in both modes, like the chart detail and the
+ * py episode page.
  */
 enum class MusicListOverlay { FAVORITES, HISTORY }
 
@@ -162,6 +167,19 @@ class MusicViewModel : ViewModel() {
 
     private val _episodePage = MutableStateFlow<PyEpisodePage?>(null)
     val episodePage: StateFlow<PyEpisodePage?> = _episodePage.asStateFlow()
+
+    /**
+     * True while any music sub-page is open: a chart detail, a
+     * menu-opened list (favourites / history) or a py episode page.
+     * The app shell collects this and hides every navigation bar
+     * while it is true (and the music tab is current), so the
+     * sub-page takes over the whole screen (v1.19.0) — the same
+     * shell-flag pattern the home tab's full-screen web view uses.
+     */
+    val subPageOpen: StateFlow<Boolean> =
+        combine(_selectedChart, _listOverlay, _episodePage) { chart, overlay, episode ->
+            chart != null || overlay != null || episode != null
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
@@ -806,7 +824,6 @@ class MusicViewModel : ViewModel() {
         if (mode == _mode.value) return
         _mode.value = mode
         if (mode == MusicMode.CHARTS) loadCharts()
-        if (mode == MusicMode.FAVORITES) loadFavorites()
     }
 
     /** Reloads the favourite list; the player page may have changed it. */
@@ -817,20 +834,16 @@ class MusicViewModel : ViewModel() {
     // ------------------------------------------------------------- menu lists
 
     /**
-     * Menu entry 歌曲收藏： native mode keeps the existing FAVORITES
-     * mode; spider mode has no mode row, so the same list opens as an
-     * overlay over the spider content instead.
+     * Menu entry 歌曲收藏： the full-screen favourites page in both
+     * modes since v1.19.0 (the FAVORITES mode and its tab are gone;
+     * the ball is the only entry).
      */
     fun openFavorites() {
         loadFavorites()
-        if (_pyActive.value) {
-            _listOverlay.value = MusicListOverlay.FAVORITES
-        } else {
-            selectMode(MusicMode.FAVORITES)
-        }
+        _listOverlay.value = MusicListOverlay.FAVORITES
     }
 
-    /** Menu entry 播放记录： an overlay in both modes (no fourth chip). */
+    /** Menu entry 播放记录： the full-screen history page. */
     fun openHistory() {
         val context = AppContextHolder.context() ?: return
         _playHistory.value = LxPlayHistory.all(context)

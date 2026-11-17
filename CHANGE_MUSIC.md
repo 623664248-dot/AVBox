@@ -1635,3 +1635,48 @@ Torres 试 v1.17.0 录屏后的三点反馈，全部在 MusicPage.kt。
 - 恢复默认、模糊/不透明度滑杆、EQ 区均未动；音源导入等其余
   文件选择器（仍需文件选择器）未动。
 - 本版同时包含 v1.18.5 的扇形展开半径放大。
+
+## v1.19.0 — 子页面真全屏 + 榜单详情瘦身 + 收藏去掉模式页签
+
+- 背景：Torres 两段录屏——点进榜单歌曲、收藏、播放记录、py
+  选集时，页面只替换音乐内容区，底部导航（首页/网页/直播/
+  音乐/我的）和主界面痕迹还在，收藏/记录更是像浮层盖在主页
+  上。他要的是「真全屏」：只保留页面自己的紧凑页头 + 歌曲
+  列表，主界面的东西一概不要；另外去掉主界面的「我的收藏」
+  页签（右上角扇形球里已有收藏入口）。
+- 机制（壳层标志，与首页 homeWebFullScreen 同一套路，不用
+  Dialog 窗口）：MusicViewModel 新增只读 StateFlow
+  `subPageOpen`（combine selectedChart / listOverlay /
+  episodePage，任一非空即 true）。MainScreen 的 MainContent
+  以 activity 级 viewModel() 取得同一个 MusicViewModel 实例
+  并 collect 该状态：音乐页签为当前页且 subPageOpen 时，
+  `musicFullScreenActive` 成立——Scaffold 底部栏、液态玻璃
+  浮动栏（含渐变 scrim）、竖屏 NavigationRail 全部不渲染，
+  且 pageContentPadding 归零（与 webFullScreenActive 同一
+  分支）。MusicPage 内部则把四个子页面从内容区分枝链移到
+  页面根 Box 的最上层渲染：不透明 surfaceContainer 背景 +
+  自带 systemBars 窗口 insets + 16dp 横向边距；同时迷你播放
+  条与多功能球在子页面打开时不渲染。主内容保持组合在下层，
+  返回时滚动位置（含 v1.18.1 提升的 py 列表/网格状态）原样
+  保留；既有三个 BackHandler（榜单/浮层/选集）与各页页头
+  返回/关闭不变。不用 Dialog 的原因：子页面留在正常组合
+  里，壳层藏导航与页内覆盖是同一个状态驱动，不会出现窗口
+  层级问题；点歌打开的播放页本来就是独立 Activity
+  （LxMusicPlayerActivity.start 走 startActivity），恒在
+  一切之上。
+- 四个子页面统一待遇：榜单详情（见下）、收藏、播放记录
+  （页头保留「清空」）、py 选集页（页头保留歌手名 + 共 N
+  首）。收藏/记录从「内容区浮层」（MusicOverlayList 原位置）
+  改为根层全屏页，渲染组件本身未动。
+- 榜单详情瘦身：详情从 ChartsContent 拆出为独立的
+  ChartDetailContent，只保留紧凑页头（返回 + 榜单名）；
+  歌曲列表首行新增「播放全部」瘦行（播放图标 + 文案，点按
+  等同点第一首歌）。ChartsContent 只剩榜单网格/加载/空态。
+  新增字符串 music_play_all（四语言：播放全部 / 播放全部 /
+  播放全部 / Play all）。
+- 收藏去掉模式页签：模式行只剩 搜索 / 排行榜 两枚 chip；
+  MusicMode.FAVORITES 枚举、selectMode 的收藏分支、内容区
+  的 FavoritesContent 渲染一并删除。openFavorites() 改为两
+  种模式统一走 listOverlay 全屏页（先 loadFavorites 刷新，
+  再置 MusicListOverlay.FAVORITES），py 模式原有的浮层收藏
+  也并入同一全屏页。

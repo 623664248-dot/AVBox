@@ -279,6 +279,7 @@
     <string name="music_favorites_empty">暂无收藏</string>
     <string name="music_menu_more">更多功能</string>
     <string name="music_menu_history">播放记录</string>
+    <string name="music_play_all">播放全部</string>
     <string name="music_history_empty">暂无播放记录</string>
     <string name="music_history_clear">清空</string>
     <string name="music_import_entry">导入音源</string>

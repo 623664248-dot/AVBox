@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -256,6 +257,15 @@ fun MusicPage(
     val miniBarVisible = nowPlaying != null &&
         (nowPlaying?.serviceBacked != true || serviceBound)
 
+    // A music sub-page (chart detail, favourites, history, py
+    // episode page) takes over the whole screen (v1.19.0): the app
+    // shell hides its navigation bars off the same condition (it
+    // collects MusicViewModel.subPageOpen), and inside the page
+    // the sub-page renders at the root above the main content
+    // while the mini bar and the multi-function ball stay hidden.
+    val subPageOpen = selectedChart != null || listOverlay != null || episodePage != null
+    val showMiniBar = miniBarVisible && !subPageOpen
+
     Box(modifier = Modifier.fillMaxSize()) {
         // Custom background (when set) spans the whole page; the content
         // box below keeps its original insets.
@@ -361,10 +371,13 @@ fun MusicPage(
                 }
             }
 
-            // Third row: search / charts / favourites mode switch. The
-            // row only exists in native mode (a py source has no platform
-            // charts), while the native mode state is left untouched in
-            // spider mode; appearance lives in the top search row now.
+            // Third row: search / charts mode switch. The row only
+            // exists in native mode (a py source has no platform
+            // charts), while the native mode state is left untouched
+            // in spider mode; appearance lives in the top search row
+            // now. Favourites had a chip here until v1.18.x; since
+            // v1.19.0 it is reached only from the multi-function
+            // ball and opens as a full-screen page.
             if (!pyActive) {
                 Row(
                     modifier = Modifier
@@ -383,11 +396,6 @@ fun MusicPage(
                         onClick = { vm.selectMode(MusicMode.CHARTS) },
                         label = { Text(stringResource(R.string.music_tab_charts)) },
                     )
-                    FilterChip(
-                        selected = mode == MusicMode.FAVORITES,
-                        onClick = { vm.selectMode(MusicMode.FAVORITES) },
-                        label = { Text(stringResource(R.string.music_favorites_title)) },
-                    )
                 }
             }
 
@@ -403,60 +411,12 @@ fun MusicPage(
                 vm.closeEpisodePage()
             }
 
-            val episodePageState = episodePage
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(bottom = if (miniBarVisible) 64.dp else 0.dp),
+                    .padding(bottom = if (showMiniBar) 64.dp else 0.dp),
             ) {
-                if (listOverlay == MusicListOverlay.FAVORITES) {
-                    // Menu-opened favourites overlay: the only way to
-                    // reach the list in spider mode (native mode uses
-                    // the FAVORITES mode branch below instead).
-                    MusicOverlayList(
-                        title = stringResource(R.string.music_favorites_title),
-                        tracks = favorites,
-                        emptyText = stringResource(R.string.music_favorites_empty),
-                        onClose = { vm.closeOverlay() },
-                        onClear = null,
-                        onPlay = { index ->
-                            LxMusicPlayerActivity.start(
-                                context,
-                                MusicTrack.listToJson(favorites),
-                                index,
-                            )
-                        },
-                    )
-                } else if (listOverlay == MusicListOverlay.HISTORY) {
-                    MusicOverlayList(
-                        title = stringResource(R.string.music_menu_history),
-                        tracks = playHistory,
-                        emptyText = stringResource(R.string.music_history_empty),
-                        onClose = { vm.closeOverlay() },
-                        onClear = { vm.clearHistory() },
-                        onPlay = { index ->
-                            LxMusicPlayerActivity.start(
-                                context,
-                                MusicTrack.listToJson(playHistory),
-                                index,
-                            )
-                        },
-                    )
-                } else if (episodePageState != null) {
-                    // A multi-episode spider vod (a singer, an album,
-                    // a playlist) opens here as a full-screen list
-                    // (v1.18.1) instead of the old picker dialog: the
-                    // rows play through the same ViewModel call the
-                    // dialog used, and closing the page returns to
-                    // the category list exactly as it was left (its
-                    // items live in the ViewModel, nothing reloads).
-                    PyEpisodeListContent(
-                        title = episodePageState.title,
-                        episodes = episodePageState.episodes,
-                        onClose = { vm.closeEpisodePage() },
-                        onPlay = { index -> vm.playEpisode(index) },
-                    )
-                } else if (noSource) {
+                if (noSource) {
                     // No user source imported yet: the bridge never
                     // inits and every list call safely returns empty,
                     // so all the page needs is this hint.
@@ -489,34 +449,12 @@ fun MusicPage(
                             modifier = Modifier.align(Alignment.Center),
                         )
                     }
-                } else if (mode == MusicMode.FAVORITES) {
-                    FavoritesContent(
-                        favorites = favorites,
-                        onPlayFavorite = { index ->
-                            LxMusicPlayerActivity.start(
-                                context,
-                                MusicTrack.listToJson(favorites),
-                                index,
-                            )
-                        },
-                    )
                 } else if (mode == MusicMode.CHARTS) {
                     ChartsContent(
                         charts = charts,
-                        chartSongs = chartSongs,
-                        selectedChart = selectedChart,
                         chartsLoading = chartsLoading,
-                        chartSongsLoading = chartSongsLoading,
                         initializing = scriptBusy || pyLoading,
                         onOpenChart = { vm.openChart(it) },
-                        onCloseChart = { vm.closeChart() },
-                        onPlayChartSong = { index ->
-                            LxMusicPlayerActivity.start(
-                                context,
-                                MusicTrack.listToJson(chartSongs),
-                                index,
-                            )
-                        },
                     )
                 } else {
                     Box(modifier = Modifier.fillMaxSize()) {
@@ -625,7 +563,7 @@ fun MusicPage(
                 }
             }
         }
-        if (miniBarVisible) {
+        if (showMiniBar) {
             val np = nowPlaying
             if (np != null) {
                 MiniPlayerBar(
@@ -706,13 +644,110 @@ fun MusicPage(
         // bar (sheets and dialogs live in their own windows, still
         // above it), in both native and spider mode; the ball
         // itself lands on the 48dp spacer reserved for it in the
-        // top row.
-        MusicMultiFab(
-            onAppearance = { appearanceOpen = true },
-            onFavorites = { vm.openFavorites() },
-            onHistory = { vm.openHistory() },
-        )
+        // top row. Hidden while a sub-page is open (v1.19.0).
+        if (!subPageOpen) {
+            MusicMultiFab(
+                onAppearance = { appearanceOpen = true },
+                onFavorites = { vm.openFavorites() },
+                onHistory = { vm.openHistory() },
+            )
+        }
     }
+
+        // True full-screen sub-pages (v1.19.0): the chart detail,
+        // favourites, history and the py episode page render here,
+        // at the page root above the main content, on an opaque
+        // background with their own system-bar insets. The shell
+        // hides its navigation bars while any of them is open (it
+        // collects MusicViewModel.subPageOpen), so nothing of the
+        // main interface — bottom nav, search row, mode tabs,
+        // source chips, mini bar, fan ball — shows around them:
+        // only the page's own compact header and its list remain.
+        // Song taps still open the player activity, which lives in
+        // its own window above this whole composition. The main
+        // content stays composed underneath, so its scroll
+        // positions (including the hoisted spider states) survive
+        // the return untouched.
+        if (subPageOpen) {
+            val episodePageState = episodePage
+            val chartState = selectedChart
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .windowInsetsPadding(WindowInsets.systemBars)
+                    .padding(horizontal = 16.dp),
+            ) {
+                when {
+                    listOverlay == MusicListOverlay.FAVORITES -> {
+                        MusicOverlayList(
+                            title = stringResource(R.string.music_favorites_title),
+                            tracks = favorites,
+                            emptyText = stringResource(R.string.music_favorites_empty),
+                            onClose = { vm.closeOverlay() },
+                            onClear = null,
+                            onPlay = { index ->
+                                LxMusicPlayerActivity.start(
+                                    context,
+                                    MusicTrack.listToJson(favorites),
+                                    index,
+                                )
+                            },
+                        )
+                    }
+
+                    listOverlay == MusicListOverlay.HISTORY -> {
+                        MusicOverlayList(
+                            title = stringResource(R.string.music_menu_history),
+                            tracks = playHistory,
+                            emptyText = stringResource(R.string.music_history_empty),
+                            onClose = { vm.closeOverlay() },
+                            onClear = { vm.clearHistory() },
+                            onPlay = { index ->
+                                LxMusicPlayerActivity.start(
+                                    context,
+                                    MusicTrack.listToJson(playHistory),
+                                    index,
+                                )
+                            },
+                        )
+                    }
+
+                    episodePageState != null -> {
+                        // A multi-episode spider vod (a singer, an
+                        // album, a playlist): the rows play through
+                        // the same ViewModel call the old picker
+                        // dialog used, and closing the page returns
+                        // to the category list exactly as it was
+                        // left (its items live in the ViewModel,
+                        // nothing reloads).
+                        PyEpisodeListContent(
+                            title = episodePageState.title,
+                            episodes = episodePageState.episodes,
+                            onClose = { vm.closeEpisodePage() },
+                            onPlay = { index -> vm.playEpisode(index) },
+                        )
+                    }
+
+                    chartState != null -> {
+                        ChartDetailContent(
+                            chart = chartState,
+                            songs = chartSongs,
+                            songsLoading = chartSongsLoading,
+                            initializing = scriptBusy || pyLoading,
+                            onClose = { vm.closeChart() },
+                            onPlaySong = { index ->
+                                LxMusicPlayerActivity.start(
+                                    context,
+                                    MusicTrack.listToJson(chartSongs),
+                                    index,
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+        }
     }
 
     if (scriptDialogOpen) {
@@ -1025,10 +1060,11 @@ private fun MusicMultiFabLabel(text: String) {
 }
 
 /**
- * A menu-opened list rendered instead of the mode content: a header
- * row (title, optional 清空 action, close button) over the shared
- * track rows. Tapping a row plays it with the whole list as the
- * queue, exactly like the native favourites list.
+ * A ball-opened full-screen list page (favourites / history): a
+ * header row (title, optional 清空 action, close button) over the
+ * shared track rows. Tapping a row plays it with the whole list as
+ * the queue. Hosted at the music page root since v1.19.0 so it
+ * covers the whole screen (see the sub-page block in [MusicPage]).
  */
 @Composable
 private fun MusicOverlayList(
@@ -1761,38 +1797,6 @@ private fun TrackRowContent(
     }
 }
 
-@Composable
-private fun FavoritesContent(
-    favorites: List<MusicTrack>,
-    onPlayFavorite: (Int) -> Unit,
-) {
-    if (favorites.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            Text(
-                text = stringResource(R.string.music_favorites_empty),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.align(Alignment.Center),
-            )
-        }
-        return
-    }
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 16.dp),
-    ) {
-        itemsIndexed(
-            favorites,
-            key = { index, _ -> index },
-        ) { index, track ->
-            MusicTrackRow(
-                track = track,
-                onClick = { onPlayFavorite(index) },
-            )
-        }
-    }
-}
-
 /**
  * Shown in place of an empty-list state while the selected source is
  * still initialising or activating: a spinner plus the script-loading
@@ -1814,82 +1818,113 @@ private fun MusicInitializingPlaceholder(modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * Full-screen chart detail (v1.19.0): a compact header (back +
+ * chart name) over the song list, hosted at the music page root
+ * so it covers the whole screen. The list's first row is
+ * 播放全部， which plays the chart from the top through the same
+ * call as tapping the first song.
+ */
 @Composable
-private fun ChartsContent(
-    charts: List<MusicChart>,
-    chartSongs: List<MusicTrack>,
-    selectedChart: MusicChart?,
-    chartsLoading: Boolean,
-    chartSongsLoading: Boolean,
+private fun ChartDetailContent(
+    chart: MusicChart,
+    songs: List<MusicTrack>,
+    songsLoading: Boolean,
     initializing: Boolean,
-    onOpenChart: (MusicChart) -> Unit,
-    onCloseChart: () -> Unit,
-    onPlayChartSong: (Int) -> Unit,
+    onClose: () -> Unit,
+    onPlaySong: (Int) -> Unit,
 ) {
-    when {
-        selectedChart != null -> {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = onCloseChart) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_arrow_left),
-                            contentDescription = stringResource(R.string.common_back),
-                        )
-                    }
-                    Text(
-                        text = selectedChart.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onClose) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_arrow_left),
+                    contentDescription = stringResource(R.string.common_back),
+                )
+            }
+            Text(
+                text = chart.name,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(modifier = Modifier.fillMaxSize()) {
+            when {
+                songsLoading -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.align(Alignment.Center),
                     )
                 }
-                Box(modifier = Modifier.fillMaxSize()) {
-                    when {
-                        chartSongsLoading -> {
-                            CircularProgressIndicator(
-                                modifier = Modifier.align(Alignment.Center),
-                            )
-                        }
 
-                        chartSongs.isEmpty() -> {
-                            if (initializing) {
-                                MusicInitializingPlaceholder(
-                                    modifier = Modifier.align(Alignment.Center),
-                                )
-                            } else {
-                                Text(
-                                    text = stringResource(R.string.music_empty_result),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.align(Alignment.Center),
-                                )
-                            }
-                        }
+                songs.isEmpty() -> {
+                    if (initializing) {
+                        MusicInitializingPlaceholder(
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.music_empty_result),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+                    }
+                }
 
-                        else -> {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(bottom = 16.dp),
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 16.dp),
+                    ) {
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPlaySong(0) }
+                                    .padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                itemsIndexed(
-                                    chartSongs,
-                                    key = { index, _ -> index },
-                                ) { index, track ->
-                                    MusicTrackRow(
-                                        track = track,
-                                        onClick = { onPlayChartSong(index) },
-                                    )
-                                }
+                                Icon(
+                                    painter = painterResource(R.drawable.player_ic_play),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    text = stringResource(R.string.music_play_all),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
                             }
+                        }
+                        itemsIndexed(
+                            songs,
+                            key = { index, _ -> index },
+                        ) { index, track ->
+                            MusicTrackRow(
+                                track = track,
+                                onClick = { onPlaySong(index) },
+                            )
                         }
                     }
                 }
             }
         }
+    }
+}
 
+@Composable
+private fun ChartsContent(
+    charts: List<MusicChart>,
+    chartsLoading: Boolean,
+    initializing: Boolean,
+    onOpenChart: (MusicChart) -> Unit,
+) {
+    when {
         chartsLoading -> {
             Box(modifier = Modifier.fillMaxSize()) {
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))

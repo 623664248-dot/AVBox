@@ -181,6 +181,14 @@ private fun MainContent() {
     // and drop the content reserve so the WebView fills the whole area.
     val homeWebFullScreen by homeViewModel.homeWebFullScreen.collectAsState()
     val webFullScreenActive = homeWebFullScreen && pagerState.targetPage == AppTab.HOME.ordinal
+    // A music sub-page (chart detail / favourites / history / py episode
+    // page) is full-screen the same way: hide every nav bar and drop the
+    // content reserve while one is open on the music tab (v1.19.0). The
+    // music ViewModel is activity-scoped, so this is the same instance
+    // MusicPage renders from.
+    val musicViewModel: MusicViewModel = viewModel()
+    val musicSubPageOpen by musicViewModel.subPageOpen.collectAsState()
+    val musicFullScreenActive = musicSubPageOpen && pagerState.targetPage == AppTab.FOLLOWING.ordinal
     val navConfig = UiSettingsState.config
     val navAnimationEnabled = !navConfig.navAnimationDisabled
     val navLiveHidden = navConfig.navLiveHidden
@@ -240,7 +248,7 @@ private fun MainContent() {
     }
     val navReserve = NavMetrics.reserveDp(liquidGlassEnabled, navAxis).dp
     val pageContentPadding: PaddingValues = when {
-        webFullScreenActive -> PaddingValues(0.dp)
+        webFullScreenActive || musicFullScreenActive -> PaddingValues(0.dp)
         railMode -> PaddingValues(
             start = navReserve + navBarsPadding.calculateStartPadding(layoutDirection),
             bottom = navBarsPadding.calculateBottomPadding(),
@@ -278,7 +286,7 @@ private fun MainContent() {
                 containerColor = MaterialTheme.colorScheme.surfaceContainer,
                 contentWindowInsets = WindowInsets(0, 0, 0, 0),
                 bottomBar = {
-                    if (surfaceNavVisible && !railMode && !webFullScreenActive) {
+                    if (surfaceNavVisible && !railMode && !webFullScreenActive && !musicFullScreenActive) {
                         ShortNavigationBar(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         ) {
@@ -377,7 +385,7 @@ private fun MainContent() {
                     }
                 }
             }
-            if (liquidGlassEnabled && !webFullScreenActive) {
+            if (liquidGlassEnabled && !webFullScreenActive && !musicFullScreenActive) {
                 if (navAxis == NavAxis.Horizontal) {
                     val scrimColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f)
                     Box(
@@ -423,7 +431,7 @@ private fun MainContent() {
                     )
                 }
             }
-            if (surfaceNavVisible && railMode && !webFullScreenActive) {
+            if (surfaceNavVisible && railMode && !webFullScreenActive && !musicFullScreenActive) {
                 NavigationRail(
                     modifier = Modifier
                         .align(Alignment.CenterStart)
