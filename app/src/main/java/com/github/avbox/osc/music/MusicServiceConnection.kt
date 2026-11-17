@@ -76,9 +76,11 @@ object MusicServiceConnection {
                 future = built
                 built.addListener(
                     {
+                        var failure: Throwable? = null
                         val mc = try {
                             built.get()
                         } catch (t: Throwable) {
+                            failure = t
                             null
                         }
                         if (mc != null) {
@@ -92,7 +94,13 @@ object MusicServiceConnection {
                             if (future === built) {
                                 future = null
                             }
-                            MusicCrashLog.log(app, "svc: shared connect failed")
+                            val cause = failure?.cause ?: failure
+                            MusicCrashLog.log(
+                                app,
+                                "svc: shared connect failed " +
+                                    "${cause?.javaClass?.simpleName}: " +
+                                    "${cause?.message}",
+                            )
                         }
                     },
                     ContextCompat.getMainExecutor(app),
@@ -101,7 +109,8 @@ object MusicServiceConnection {
                 future = null
                 MusicCrashLog.log(
                     app,
-                    "svc: shared connect start failed ${t.javaClass.simpleName}",
+                    "svc: shared connect start failed " +
+                        "${t.javaClass.simpleName}: ${t.message}",
                 )
             }
         }

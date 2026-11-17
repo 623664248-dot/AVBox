@@ -35,6 +35,18 @@
             <category android:name="android.intent.category.BROWSABLE" />
             <data android:scheme="https" />
         </intent>
+        <!-- v1.15.4: media3's SessionToken resolves a MediaSessionService by
+             queryIntentServices(action, own package); on the test device
+             (Honor/MagicOS) that query returned nothing, so SessionToken
+             threw IllegalArgumentException and the music playback service
+             could never connect. Declare visibility for both session
+             service actions explicitly. -->
+        <intent>
+            <action android:name="androidx.media.session.MediaSessionService" />
+        </intent>
+        <intent>
+            <action android:name="android.media.session.MediaSessionService" />
+        </intent>
     </queries>
 
     <application

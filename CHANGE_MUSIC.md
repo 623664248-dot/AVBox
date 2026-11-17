@@ -1072,3 +1072,28 @@ Torres 反馈：左上角唱片只有播放时才转，没点歌时全程静止�
 1. 进音乐页不点歌：左上角唱片也缓慢转动，不是静止图标。
 2. 点歌播放后：唱片转速明显加快（约 0.6 秒内提速到位）。
 3. 暂停后：转速缓缓回落到慢转，而不是立刻停住。
+
+## v1.15.4 — 后台播放连不上：根因定位与修复
+
+Torres 于 2026-11-17 发来 music_crash.log，日志给出决定性证据（v1.15.3，10:03–10:05）：
+
+```
+svc: shared connect start
+svc: shared connect start failed IllegalArgumentException   ← 1–2ms 内必现
+player: connect timeout after 2ms (retry=false)
+player: degrade to local (connect-timeout)
+```
+
+即连接不是超时、更不是服务慢，而是**在构造连接令牌时同步抛异常**，服务根本没有被拉起过（日志中无 svc: service onCreate / onGetSession）。对照 media3-session 1.11.1 源码：`SessionToken(Context, ComponentName)` 构造器用 `queryIntentServices(Intent("androidx.media.session.MediaSessionService").setPackage(本包名), GET_META_DATA)` 解析目标服务，三种接口都查不到时抛 `IllegalArgumentException("Failed to resolve SessionToken for ...")`。已核对发布 APK 的合并清单：LxPlaybackService 声明完整（exported=true、mediaPlayback、两个 MediaSessionService action 齐全），源码侧亦无任何禁用该组件的代码——即清单没问题，是测试机（荣耀/MagicOS）的包管理查询在该调用下返回了空结果。此根因同时解释 v1.9.0 点歌闪退（当时同一构造在 Activity 里无降级兜底、异常直接崩溃）与 v1.13.3 起的「静默降级本地播放」（无通知、无迷你条、无灵动岛）；此前「3 秒超时太短」的判断是错的。
+
+修复（本版）：
+
+1. `AndroidManifest.xml` 的既有 `<queries>` 块中显式声明对 `androidx.media.session.MediaSessionService` 与 `android.media.session.MediaSessionService` 两个 action 的可见性，使上述包管理查询能命中本应用的播放服务。
+2. `MusicServiceConnection` 的两处失败日志补上异常 message（此前只记类名）：shared connect start failed 与 shared connect failed（后者取 ExecutionException 的 cause）。若本修复无效，新日志会直接给出异常原文以便下一步判断。
+
+### 真机验证点
+
+1. 点一首歌播放：应能正常出声（不回归）。
+2. 播放中按 Home 退到桌面：歌继续播，通知栏出现 AVBox 播放通知（歌名/歌手/封面，可暂停），荣耀灵动岛/控制中心媒体卡显示正在播放。
+3. 回到音乐页：底部出现迷你播放条，暂停/下一首/关闭可用，点条身回播放页且不重头播。
+4. 若仍不行：再发一次 music_crash.log——新版日志带异常原文（预期能看到 "svc: shared connected" 则说明已连上）。
