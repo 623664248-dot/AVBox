@@ -13,13 +13,10 @@ import com.github.avbox.osc.music.MusicChart
 import com.github.avbox.osc.music.MusicTrack
 import com.github.avbox.osc.music.PyMusicBridge
 import com.github.avbox.osc.music.PyMusicSources
-import com.github.avbox.osc.music.SongRecognizer
 import com.github.avbox.osc.util.AppContextHolder
 import com.github.avbox.osc.util.KV
 import com.github.avbox.osc.util.LanguageManager
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -41,15 +38,6 @@ import kotlinx.coroutines.withContext
  * 音源 scripts and their interfaces are not involved.
  */
 enum class MusicMode { SEARCH, CHARTS }
-
-/** Phases of the radar 听歌识曲 flow (v1.20.0). */
-enum class RecognizePhase { IDLE, NEED_KEYS, LISTENING, IDENTIFYING }
-
-/** Radar UI state: the current phase plus the listening countdown. */
-data class RecognizeState(
-    val phase: RecognizePhase = RecognizePhase.IDLE,
-    val secondsLeft: Int = 0,
-)
 
 /**
  * A full-screen list page opened from the top-right multi-function
@@ -203,30 +191,11 @@ class MusicViewModel : ViewModel() {
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
-    // ---------------------------------------------------- 听歌识曲 (v1.20.0)
-    // The radar button's state machine. NEED_KEYS opens the ACRCloud
-    // key dialog; LISTENING counts down the microphone capture;
-    // IDENTIFYING covers the recognition round-trip. Results travel
-    // back as a search (plus an auto-play request in JS mode) rather
-    // than a bespoke result page, so a recognised song lands exactly
-    // where a typed search would put it.
-
-    private val _recognizeState = MutableStateFlow(RecognizeState())
-    val recognizeState: StateFlow<RecognizeState> = _recognizeState.asStateFlow()
-
-    /** One-shot: the page mirrors this into its search field text. */
-    private val _queryEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
-    val queryEvents: SharedFlow<String> = _queryEvents.asSharedFlow()
-
-    /** One-shot: play this queue at this index (recognition hit). */
+    /** One-shot: play this queue at this index (voice-search hit). */
     private val _playRequests =
         MutableSharedFlow<Pair<List<MusicTrack>, Int>>(extraBufferCapacity = 1)
     val playRequests: SharedFlow<Pair<List<MusicTrack>, Int>> = _playRequests.asSharedFlow()
 
-    private var recognizeJob: Job? = null
-
-    @Volatile
-    private var recognizeCancelled: Boolean = false
 
     private var lastKeyword: String = ""
     private var page: Int = 1
@@ -242,6 +211,9 @@ class MusicViewModel : ViewModel() {
     private var pyPage: Int = 1
     private var pyHasMore: Boolean = false
     private var pyKeyword: String = ""
+
+    /** Voice search: auto-play the first song row when results land. */
+    private var pyVoicePlayPending: Boolean = false
     private var pySeq: Int = 0
 
     init {
@@ -690,6 +662,7 @@ class MusicViewModel : ViewModel() {
     }
 
     fun pySearch(keyword: String) {
+        pyVoicePlayPending = false
         val kw = keyword.trim()
         if (kw.isEmpty() || !_pyActive.value) return
         pyKeyword = kw
@@ -740,6 +713,15 @@ class MusicViewModel : ViewModel() {
                     result.items
                 } else {
                     appendDedup(_pyItems.value, result.items)
+                }
+                if (reset && searching && pyVoicePlayPending) {
+                    pyVoicePlayPending = false
+                    val firstSong = _pyItems.value.firstOrNull {
+                        !it.songmid.startsWith("artist:")
+                    }
+                    if (firstSong != null) {
+                        onPyTrackClick(firstSong)
+                    }
                 }
             } catch (e: Exception) {
                 if (seq == pySeq) {
@@ -1007,162 +989,48 @@ class MusicViewModel : ViewModel() {
         _chartSongsLoading.value = false
     }
 
-    // ---------------------------------------------------- 听歌识曲 actions
-
-    fun acrHasKeys(): Boolean = SongRecognizer.hasKeys()
-
-    /** The stored ACRCloud keys, for pre-filling the key dialog. */
-    fun acrKeys(): SongRecognizer.Keys = SongRecognizer.loadKeys()
-
-    /** Radar tap with no keys on file: open the key-entry dialog. */
-    fun requestRecognizeKeys() {
-        if (_recognizeState.value.phase == RecognizePhase.IDLE) {
-            _recognizeState.value = RecognizeState(RecognizePhase.NEED_KEYS)
-        }
-    }
-
-    /** Closes the key-entry dialog without starting a capture. */
-    fun dismissRecognize() {
-        if (_recognizeState.value.phase == RecognizePhase.NEED_KEYS) {
-            _recognizeState.value = RecognizeState()
-        }
-    }
-
-    fun saveAcrKeys(host: String, accessKey: String, accessSecret: String) {
-        SongRecognizer.saveKeys(SongRecognizer.Keys(host, accessKey, accessSecret))
-        _recognizeState.value = RecognizeState()
-    }
+    // ------------------------------------------------- voice search play
 
     /**
-     * Records [RECOGNIZE_SECONDS] from the microphone and identifies
-     * the sample. The caller (the page) owns the RECORD_AUDIO
-     * permission; this only runs once it is granted. On a hit the
-     * recognised "title artist" becomes the current search — in JS
-     * mode the best-matching result also auto-plays (Torres: 准确
-     * 找到歌曲并播放); in py mode the search result is one tap from
-     * playing, like any py search.
+     * Voice search follow-through (v1.21.0, Torres: 识别好直接播放）:
+     * like [search], but the first result is handed to the page as a
+     * play request, so a dictated song starts playing instead of
+     * just landing in the result list.
      */
-    fun startRecognize() {
-        val phase = _recognizeState.value.phase
-        if (phase == RecognizePhase.LISTENING || phase == RecognizePhase.IDENTIFYING) {
-            return
-        }
-        if (!SongRecognizer.hasKeys()) {
-            _recognizeState.value = RecognizeState(RecognizePhase.NEED_KEYS)
-            return
-        }
-        val keys = SongRecognizer.loadKeys()
-        recognizeCancelled = false
-        recognizeJob = viewModelScope.launch {
-            _recognizeState.value =
-                RecognizeState(RecognizePhase.LISTENING, RECOGNIZE_SECONDS)
-            val ticker = launch {
-                var left = RECOGNIZE_SECONDS
-                while (left > 1) {
-                    delay(1000)
-                    left--
-                    if (_recognizeState.value.phase == RecognizePhase.LISTENING) {
-                        _recognizeState.value =
-                            RecognizeState(RecognizePhase.LISTENING, left)
-                    }
-                }
-            }
-            val wav = try {
-                withContext(Dispatchers.IO) {
-                    SongRecognizer.recordWav(RECOGNIZE_SECONDS) { recognizeCancelled }
-                }
-            } catch (e: SongRecognizer.RecognizeException) {
-                ticker.cancel()
-                _recognizeState.value = RecognizeState()
-                if (!recognizeCancelled) {
-                    _messages.tryEmit(e.message ?: str(R.string.music_recognize_failed))
-                }
-                return@launch
-            } catch (t: Throwable) {
-                ticker.cancel()
-                _recognizeState.value = RecognizeState()
-                if (!recognizeCancelled) {
-                    _messages.tryEmit(str(R.string.music_recognize_failed))
-                }
-                return@launch
-            }
-            ticker.cancel()
-            if (recognizeCancelled) {
-                _recognizeState.value = RecognizeState()
-                return@launch
-            }
-            _recognizeState.value = RecognizeState(RecognizePhase.IDENTIFYING)
-            val song = try {
-                withContext(Dispatchers.IO) { SongRecognizer.identify(wav, keys) }
-            } catch (e: SongRecognizer.RecognizeException) {
-                _recognizeState.value = RecognizeState()
-                _messages.tryEmit(e.message ?: str(R.string.music_recognize_failed))
-                return@launch
-            } catch (t: Throwable) {
-                _recognizeState.value = RecognizeState()
-                _messages.tryEmit(str(R.string.music_recognize_failed))
-                return@launch
-            }
-            _recognizeState.value = RecognizeState()
-            if (song == null) {
-                _messages.tryEmit(str(R.string.music_recognize_no_match))
-                return@launch
-            }
-            _messages.tryEmit(
-                str(
-                    R.string.music_recognize_found,
-                    song.title,
-                    song.artist.ifBlank { "—" },
-                ),
-            )
-            val keyword = (song.title + " " + song.artist).trim()
-            _queryEvents.tryEmit(keyword)
-            if (_pyActive.value) {
-                pySearch(keyword)
-            } else {
-                if (_mode.value != MusicMode.SEARCH) selectMode(MusicMode.SEARCH)
-                searchAndAutoPlay(keyword, song)
-            }
-        }
-    }
-
-    fun cancelRecognize() {
-        recognizeCancelled = true
-        recognizeJob?.cancel()
-        recognizeJob = null
-        _recognizeState.value = RecognizeState()
-    }
-
-    /**
-     * [search] plus the recognition follow-through: when a result's
-     * name contains the recognised title, ask the page to start the
-     * player on it (the queue is the full result list).
-     */
-    private fun searchAndAutoPlay(keyword: String, song: SongRecognizer.RecognizedSong) {
+    fun voiceSearchAndPlay(keyword: String) {
+        val kw = keyword.trim()
+        if (kw.isEmpty()) return
         val source = _selectedSource.value
         if (source.isEmpty()) {
-            search(keyword)
+            search(kw)
             return
         }
-        lastKeyword = keyword
+        lastKeyword = kw
         page = 1
         hasMore = false
         val seq = ++searchSeq
         _loading.value = true
         _searched.value = true
         viewModelScope.launch {
-            val list = MusicApi.search(source, keyword, 1)
+            val list = MusicApi.search(source, kw, 1)
             if (seq != searchSeq) return@launch
             _results.value = list
             hasMore = list.size >= MusicApi.PAGE_SIZE
             _loading.value = false
-            val index = list.indexOfFirst {
-                it.name.contains(song.title, ignoreCase = true)
-            }
-            if (index >= 0) {
-                _playRequests.tryEmit(list to index)
+            if (list.isNotEmpty()) {
+                _playRequests.tryEmit(list to 0)
             }
         }
+    }
+
+    /**
+     * Voice search in spider mode: run the spider search and flag
+     * its first song row for [onPyTrackClick] once the results land
+     * (see loadPyList), so it plays straight away.
+     */
+    fun voicePySearch(keyword: String) {
+        pySearch(keyword)
+        pyVoicePlayPending = true
     }
 
     // ------------------------------------------------------------- misc
@@ -1174,9 +1042,6 @@ class MusicViewModel : ViewModel() {
 
     companion object {
         private const val KV_SCRIPT_ID = "lx_music_script_id"
-
-        /** Microphone capture length for one recognition attempt. */
-        private const val RECOGNIZE_SECONDS = 10
 
         /** How much of a picked file the import dispatch sniffs. */
         private const val SNIFF_BYTES = 64 * 1024

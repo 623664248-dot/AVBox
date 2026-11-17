@@ -1,11 +1,15 @@
 package com.github.avbox.osc.music
 
 import android.animation.ObjectAnimator
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.graphics.Outline
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
@@ -32,8 +36,9 @@ import kotlin.math.abs
  * system overlay permission is granted, the app itself is in the
  * background (the in-app mini bar covers the foreground case) and
  * a track is loaded. The disc spins while playing; a corner badge
- * shows play/pause; tap toggles play/pause, drag moves it (the
- * position is remembered).
+ * shows play/pause; a single tap toggles play/pause, a double tap
+ * opens the player page, drag moves it (the position is
+ * remembered).
  *
  * Hosted from [LxPlaybackService], the component that outlives
  * every activity while music plays. Every window operation is
@@ -44,6 +49,9 @@ object FloatingMiniPlayer {
     private const val KEY_X = "lx_floating_mini_x"
     private const val KEY_Y = "lx_floating_mini_y"
     private const val SIZE_DP = 58
+
+    /** Single/double tap disambiguation window on the disc. */
+    private const val DOUBLE_TAP_MS = 280L
 
     private var windowManager: WindowManager? = null
     private var rootView: FrameLayout? = null
@@ -219,6 +227,22 @@ object FloatingMiniPlayer {
         }
     }
 
+    /** Double-tap on the disc: bring the player page up, attached. */
+    private fun openPlayerPage(context: Context) {
+        try {
+            val intent = Intent().setComponent(
+                ComponentName(
+                    context,
+                    "com.github.avbox.osc.ui.music.LxMusicPlayerActivity",
+                ),
+            ).putExtra("lx_attach", true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (t: Throwable) {
+            // No player page to open.
+        }
+    }
+
     private fun togglePlayPause() {
         try {
             val np = NowPlayingState.current() ?: return
@@ -233,13 +257,36 @@ object FloatingMiniPlayer {
         }
     }
 
-    /** Drag to move (position persisted), tap to play/pause. */
+    /**
+     * Drag to move (position persisted). Taps are disambiguated like
+     * everywhere else: a single tap toggles play/pause after a short
+     * window, a second tap inside that window opens the player page
+     * instead (v1.21.0, Torres).
+     */
     private class DragTouchListener : View.OnTouchListener {
+        private val handler = Handler(Looper.getMainLooper())
+        private var pendingToggle: Runnable? = null
         private var downRawX = 0f
         private var downRawY = 0f
         private var startX = 0
         private var startY = 0
         private var moved = false
+
+        private fun onTap(view: View) {
+            val pending = pendingToggle
+            if (pending != null) {
+                handler.removeCallbacks(pending)
+                pendingToggle = null
+                openPlayerPage(view.context)
+            } else {
+                val toggle = Runnable {
+                    pendingToggle = null
+                    togglePlayPause()
+                }
+                pendingToggle = toggle
+                handler.postDelayed(toggle, DOUBLE_TAP_MS)
+            }
+        }
 
         override fun onTouch(view: View, event: MotionEvent): Boolean {
             val lp = layoutParams ?: return false
@@ -272,7 +319,7 @@ object FloatingMiniPlayer {
                         KV.put(KEY_X, lp.x.toString())
                         KV.put(KEY_Y, lp.y.toString())
                     } else {
-                        togglePlayPause()
+                        onTap(view)
                     }
                     return true
                 }

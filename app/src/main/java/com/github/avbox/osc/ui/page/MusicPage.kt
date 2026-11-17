@@ -67,10 +67,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
@@ -180,7 +176,6 @@ fun MusicPage(
     val pyDetailLoading by vm.pyDetailLoading.collectAsStateWithLifecycle()
     val pendingPyPlay by vm.pendingPyPlay.collectAsStateWithLifecycle()
     val episodePage by vm.episodePage.collectAsStateWithLifecycle()
-    val recognizeState by vm.recognizeState.collectAsStateWithLifecycle()
 
     var query by rememberSaveable { mutableStateOf("") }
     var scriptDialogOpen by remember { mutableStateOf(false) }
@@ -232,13 +227,6 @@ fun MusicPage(
         }
     }
 
-    // Recognition results land in the search field (v1.20.0), and a
-    // JS-mode recognition hit asks the page to open the player on
-    // the matched result.
-    LaunchedEffect(vm) {
-        vm.queryEvents.collect { query = it }
-    }
-
     LaunchedEffect(vm) {
         vm.playRequests.collect { (queue, index) ->
             LxMusicPlayerActivity.start(
@@ -260,6 +248,19 @@ fun MusicPage(
                 vm.selectMode(MusicMode.SEARCH)
             }
             vm.search(query)
+        }
+    }
+
+    // Voice results skip the result list (v1.21.0, Torres: 识别好
+    // 直接播放）: the first hit plays straight away in both modes.
+    fun submitVoiceSearch() {
+        if (pyActive) {
+            vm.voicePySearch(query)
+        } else {
+            if (mode != MusicMode.SEARCH) {
+                vm.selectMode(MusicMode.SEARCH)
+            }
+            vm.voiceSearchAndPlay(query)
         }
     }
 
@@ -309,7 +310,7 @@ fun MusicPage(
                     .orEmpty()
                 if (text.isNotBlank()) {
                     query = text
-                    submitSearch()
+                    submitVoiceSearch()
                 }
             }
 
@@ -333,7 +334,7 @@ fun MusicPage(
             ?.firstOrNull()
         if (!text.isNullOrBlank()) {
             query = text
-            submitSearch()
+            submitVoiceSearch()
         }
     }
 
@@ -397,16 +398,6 @@ fun MusicPage(
         } else {
             pendingMicAction = action
             micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
-    }
-
-    // Radar tap: no keys yet → the key dialog; keys on file → the
-    // permission gate → the ViewModel's capture/identify flow.
-    fun onRadarClick() {
-        if (!vm.acrHasKeys()) {
-            vm.requestRecognizeKeys()
-        } else {
-            withMicPermission { vm.startRecognize() }
         }
     }
 
@@ -527,13 +518,6 @@ fun MusicPage(
                     voiceListening = voiceListening,
                     modifier = Modifier.weight(1f),
                 )
-                // Radar 听歌识曲 (v1.20.0): sits between the search
-                // field and the multi-function ball's seat; the seat
-                // spacer stays last in the row, so the ball overlay's
-                // anchor math is unchanged.
-                TopRoundButton(onClick = { onRadarClick() }) {
-                    RadarGlyph()
-                }
                 // The multi-function ball's seat: a 48dp spacer at
                 // the row's right end (8dp spacing like the other
                 // gaps). MusicMultiFab draws the ball itself over
@@ -1027,108 +1011,6 @@ fun MusicPage(
             dismissButton = {
                 TextButton(onClick = { scriptDialogOpen = false }) {
                     Text(stringResource(R.string.common_cancel))
-                }
-            },
-        )
-    }
-
-    // 听歌识曲 key entry (v1.20.0): shown when the radar is tapped
-    // before any ACRCloud keys are stored. The keys belong to
-    // Torres's own ACRCloud project and persist in KV via the
-    // ViewModel; saving closes the dialog and starts the capture
-    // straight away (through the same permission gate as the radar).
-    if (recognizeState.phase == RecognizePhase.NEED_KEYS) {
-        val stored = remember { vm.acrKeys() }
-        var acrHost by remember { mutableStateOf(stored.host) }
-        var acrKey by remember { mutableStateOf(stored.accessKey) }
-        var acrSecret by remember { mutableStateOf(stored.accessSecret) }
-        AVBoxAlertDialog(
-            onDismissRequest = { vm.dismissRecognize() },
-            title = { Text(stringResource(R.string.music_recognize)) },
-            text = {
-                Column {
-                    Text(
-                        text = stringResource(R.string.music_acr_keys_intro),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = acrHost,
-                        onValueChange = { acrHost = it },
-                        label = { Text(stringResource(R.string.music_acr_host_hint)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = acrKey,
-                        onValueChange = { acrKey = it },
-                        label = { Text(stringResource(R.string.music_acr_key_hint)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = acrSecret,
-                        onValueChange = { acrSecret = it },
-                        label = { Text(stringResource(R.string.music_acr_secret_hint)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        vm.saveAcrKeys(acrHost, acrKey, acrSecret)
-                        withMicPermission { vm.startRecognize() }
-                    },
-                ) {
-                    Text(stringResource(R.string.common_save))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { vm.dismissRecognize() }) {
-                    Text(stringResource(android.R.string.cancel))
-                }
-            },
-        )
-    }
-
-    // 听歌识曲 in progress: a pulsing radar while the microphone
-    // captures, then a plain "identifying" state for the round-trip.
-    // Dismissing (or the cancel button) aborts the capture.
-    if (recognizeState.phase == RecognizePhase.LISTENING ||
-        recognizeState.phase == RecognizePhase.IDENTIFYING
-    ) {
-        val listening = recognizeState.phase == RecognizePhase.LISTENING
-        AVBoxAlertDialog(
-            onDismissRequest = { vm.cancelRecognize() },
-            title = { Text(stringResource(R.string.music_recognize)) },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    RadarPulse()
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = if (listening) {
-                            stringResource(
-                                R.string.music_recognize_listening,
-                                recognizeState.secondsLeft,
-                            )
-                        } else {
-                            stringResource(R.string.music_recognize_identifying)
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { vm.cancelRecognize() }) {
-                    Text(stringResource(android.R.string.cancel))
                 }
             },
         )
@@ -2035,64 +1917,6 @@ private fun VinylCanvasDisc(playing: Boolean) {
             center = Offset(c.x + r * 0.20f, c.y - r * 0.12f),
         )
         drawCircle(color = holeColor, radius = r * 0.09f)
-    }
-}
-
-/**
- * The radar glyph of the 听歌识曲 button (v1.20.0), self-drawn like
- * the vinyl disc: a centre dot with three radiating arcs. No stock
- * material icon reads as "radar" at 20dp, and a drawn glyph cannot
- * go missing from an icons-library version.
- */
-@Composable
-private fun RadarGlyph() {
-    val color = MaterialTheme.colorScheme.onSurfaceVariant
-    Canvas(modifier = Modifier.size(20.dp)) {
-        val c = center
-        val maxR = size.minDimension / 2f
-        drawCircle(color = color, radius = 2.2.dp.toPx(), center = c)
-        for (fraction in listOf(0.48f, 0.74f, 1f)) {
-            val r = maxR * fraction
-            drawArc(
-                color = color,
-                startAngle = -55f,
-                sweepAngle = 110f,
-                useCenter = false,
-                style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round),
-                topLeft = Offset(c.x - r, c.y - r),
-                size = Size(r * 2f, r * 2f),
-            )
-        }
-    }
-}
-
-/** Expanding radar rings shown while 听歌识曲 listens / identifies. */
-@Composable
-private fun RadarPulse() {
-    val transition = rememberInfiniteTransition(label = "radar")
-    val progress by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1600),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "radarPulse",
-    )
-    val color = MaterialTheme.colorScheme.primary
-    Canvas(modifier = Modifier.size(72.dp)) {
-        val c = center
-        val maxR = size.minDimension / 2f
-        for (i in 0..1) {
-            val p = (progress + i * 0.5f) % 1f
-            drawCircle(
-                color = color.copy(alpha = (1f - p) * 0.5f),
-                radius = maxR * p,
-                center = c,
-                style = Stroke(width = 2.dp.toPx()),
-            )
-        }
-        drawCircle(color = color, radius = 5.dp.toPx(), center = c)
     }
 }
 
