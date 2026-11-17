@@ -1541,3 +1541,26 @@ Torres 试 v1.17.0 录屏后的三点反馈，全部在 MusicPage.kt。
 - 字符串未新增：球与三项文案复用 music_menu_more /
   music_appearance / music_favorites_title /
   music_menu_history。
+
+## v1.18.3 — 悬浮球改固定位置
+
+- 背景：v1.18.2 的悬浮球可拖动、位置存 KV；Torres 试后说
+  「不要悬浮，固定就行」，故去掉拖动，球固定在原默认位置。
+- 删除：MusicMultiFab 的整套拖动逻辑——awaitEachGesture 单
+  循环手势、offset 状态、钳制计算、根 Box 的 onSizeChanged
+  尺寸测量（pageSize 只服务于球，一并删除）、KV 键
+  music_multi_fab_pos 的读写（常量同删，球内不再有任何 KV
+  访问）。随之删除的 import：awaitEachGesture /
+  awaitFirstDown / pointerInput / positionChange /
+  onSizeChanged / IntOffset / IntSize / roundToInt。
+- 固定方式：球改为普通 clickable 点击目标（无涟漪，与页内
+  其他圆形按钮一致），点按切换展开。位置用根 Box 内的对齐
+  实现（全尺寸透明 wrapper + BottomEnd 对齐的 48dp 锚点
+  Box），不用绝对偏移：内容区右下角，右边距 16dp，底边距
+  76dp 避开迷你播放条条带——即 v1.18.2 的默认位置。
+- 展开恒向上（球固定在底部，原上下方向判断删除）：3 项
+  （外观 / 我的收藏 / 播放记录，同图标同标签片，标签恒在球
+  左侧朝向页内）以 56dp 步进向上排列；透明 scrim、点球再
+  点收起、点项先收起再执行原动作，全部不变（三个动作仍各
+  只有球这一处调用点）。
+- 功能无其他变化：全屏选集页、播放记录、统一导入均未动。
