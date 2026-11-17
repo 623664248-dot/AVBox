@@ -1795,3 +1795,10 @@ Torres 两点要求：① 左上角音源（黑胶）按钮加长按刷新站点
 | `music/MusicPlayPrefs.kt` | 后台播放 / 圆形迷你播放器两个开关（KV） |
 | `music/FloatingMiniPlayer.kt` | 悬浮圆盘（WindowManager overlay，服务托管） |
 | `util/AppForeground.kt` | 进程级前后台跟踪（Application 注册计数） |
+
+# v1.20.1 修复：圆形迷你播放器在系统权限列表里找不到
+
+- v1.20.0 漏在 AndroidManifest 声明 SYSTEM_ALERT_WINDOW：未声明的
+  应用不会出现在系统「显示在其他应用的上层」列表里，
+  Settings.canDrawOverlays 也永远为 false，悬浮圆盘无从开启。
+  本版补上该权限声明，其余不变。
