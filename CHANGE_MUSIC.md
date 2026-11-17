@@ -1680,3 +1680,36 @@ Torres 试 v1.17.0 录屏后的三点反馈，全部在 MusicPage.kt。
   种模式统一走 listOverlay 全屏页（先 loadFavorites 刷新，
   再置 MusicListOverlay.FAVORITES），py 模式原有的浮层收藏
   也并入同一全屏页。
+
+## v1.19.1 — 去掉「搜索 / 排行榜」模式页签行
+
+- 背景：Torres 指着音乐主界面截图说把第三行的「搜索」「排行榜」
+  两枚页签去掉，并问会不会影响其他音源。结论先行：不会——这是
+  纯 UI 内容切换的改动，音源脚本、桥（LxBridge / PyMusicBridge）
+  与各平台接口一概没动；搜索、榜单、解析播放走的还是原来那些
+  调用。
+- 改动（仅原生 JS 模式；py 模式本来就没有这一行，完全未动）：
+  - 删除页签行 composable（两枚 FilterChip）及其专属代码；
+    平台 chips 行保留（仍在榜单内容上方作平台切换）。
+  - 内容切换改由搜索活动驱动：主界面默认显示排行榜内容
+    （MusicMode.CHARTS 本就是 VM 默认值，init 的 loadCharts
+    不变）；顶部搜索框提交时仍先 selectMode(SEARCH) 再 search
+    ——触发方式与改前一致，结果列表、分页、空态渲染未动。
+  - 新增 LaunchedEffect(query, mode, pyActive)：原生模式下
+    处于 SEARCH 且 query 被清空（删空输入框）时自动
+    selectMode(CHARTS) 回到榜单。
+  - 新增一个与既有三个同风格的 BackHandler：SEARCH 模式且
+    无任何子页面打开时，系统返回回到榜单；条件与榜单详情/
+    浮层/选集的 handler 互斥，子页面优先消费返回。
+  - MusicMode 枚举保留为 VM 内部状态（SEARCH / CHARTS），
+    selectMode 不再被任何页签 UI 调用，只剩搜索提交、清空
+    回榜、返回回榜三处调用点；枚举 KDoc 已注明。
+- 酷我榜单行为（v1.17.2）保持原样：判断仍以 mode == CHARTS
+  为准——无搜索活动时（默认态）酷我 chip 仍隐藏，且选中平台
+  为 kw 时仍自动切换到第一个非 kw 平台并重载榜单，不会停在
+  已知为空的酷我榜单上；进入搜索后 kw chip 与酷我搜索照常
+  可用。
+- 子页面（榜单详情/收藏/记录/py 选集）、右上角扇形球、
+  subPageOpen 壳层接线、py 内容分支与提升的滚动状态均未动。
+  热门搜索词的空态分支保留在搜索内容里（无页签后不再有独立
+  入口，仅作兜底渲染）。

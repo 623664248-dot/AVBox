@@ -29,7 +29,14 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Music tab content mode: platform search, per-platform charts. */
+/**
+ * Music tab content mode: per-platform charts or platform search.
+ * Internal state only since v1.19.1 — the tab row that switched it
+ * by hand is gone; charts are the default, a submitted search
+ * switches to SEARCH, and clearing the query (or system back)
+ * switches back to CHARTS. The switch is a pure UI-content choice:
+ * 音源 scripts and their interfaces are not involved.
+ */
 enum class MusicMode { SEARCH, CHARTS }
 
 /**

@@ -225,6 +225,18 @@ fun MusicPage(
         }
     }
 
+    // Since v1.19.1 there is no search / charts tab row: the charts
+    // are the default content, a submitted search switches to the
+    // search mode (see the field's onSearch below), and emptying
+    // the query again returns to the charts — the mode is driven
+    // purely by search activity. Spider mode has its own search
+    // state (pySearchActive) and is left untouched here.
+    LaunchedEffect(query, mode, pyActive) {
+        if (!pyActive && mode == MusicMode.SEARCH && query.isBlank()) {
+            vm.selectMode(MusicMode.CHARTS)
+        }
+    }
+
     // Warm the shared playback-service binding while the user is
     // still browsing (v1.15.1): the player page then adopts an
     // already-bound service instead of cold-starting it on tap,
@@ -371,33 +383,13 @@ fun MusicPage(
                 }
             }
 
-            // Third row: search / charts mode switch. The row only
-            // exists in native mode (a py source has no platform
-            // charts), while the native mode state is left untouched
-            // in spider mode; appearance lives in the top search row
-            // now. Favourites had a chip here until v1.18.x; since
-            // v1.19.0 it is reached only from the multi-function
-            // ball and opens as a full-screen page.
-            if (!pyActive) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    FilterChip(
-                        selected = mode == MusicMode.SEARCH,
-                        onClick = { vm.selectMode(MusicMode.SEARCH) },
-                        label = { Text(stringResource(R.string.music_tab_search)) },
-                    )
-                    FilterChip(
-                        selected = mode == MusicMode.CHARTS,
-                        onClick = { vm.selectMode(MusicMode.CHARTS) },
-                        label = { Text(stringResource(R.string.music_tab_charts)) },
-                    )
-                }
-            }
+            // No third row since v1.19.1: the search / charts tab
+            // switch is gone (favourites already left it in v1.19.0
+            // for the multi-function ball). The charts below are the
+            // default content; a submitted search replaces them with
+            // the results, and clearing the query or pressing back
+            // returns here — see the effect above and the BackHandler
+            // below. Spider mode never had the row and is unchanged.
 
             BackHandler(enabled = mode == MusicMode.CHARTS && selectedChart != null) {
                 vm.closeChart()
@@ -409,6 +401,17 @@ fun MusicPage(
 
             BackHandler(enabled = episodePage != null && listOverlay == null) {
                 vm.closeEpisodePage()
+            }
+
+            // Search results are a detour off the charts (v1.19.1):
+            // system back returns to them. The conditions keep this
+            // behind the sub-page handlers above — an open chart,
+            // overlay or episode page consumes back first.
+            BackHandler(
+                enabled = !pyActive && mode == MusicMode.SEARCH &&
+                    selectedChart == null && listOverlay == null && episodePage == null,
+            ) {
+                vm.selectMode(MusicMode.CHARTS)
             }
 
             Box(
@@ -660,7 +663,7 @@ fun MusicPage(
         // background with their own system-bar insets. The shell
         // hides its navigation bars while any of them is open (it
         // collects MusicViewModel.subPageOpen), so nothing of the
-        // main interface — bottom nav, search row, mode tabs,
+        // main interface — bottom nav, search row,
         // source chips, mini bar, fan ball — shows around them:
         // only the page's own compact header and its list remain.
         // Song taps still open the player activity, which lives in
