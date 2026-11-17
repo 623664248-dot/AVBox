@@ -17,8 +17,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -317,6 +319,10 @@ fun MusicPage(
                 VinylSourceButton(
                     playing = nowPlaying?.isPlaying == true,
                     onClick = { scriptDialogOpen = true },
+                    // Long-press refreshes the current source in
+                    // place (v1.19.2): py sources re-fetch their
+                    // home/category, JS sources re-init.
+                    onLongClick = { vm.refreshCurrentSource() },
                 )
                 MusicSearchField(
                     query = query,
@@ -446,6 +452,16 @@ fun MusicPage(
                         onClearSearch = { vm.pyClearSearch() },
                         onLoadMore = { vm.pyLoadMore() },
                         onItemClick = { track -> vm.onPyTrackClick(track) },
+                        onPlayAll = if (
+                            (pySearchActive ||
+                                pyClasses.firstOrNull { it.id == selectedPyClass }
+                                    ?.name?.let(::isSingerClassName) != true) &&
+                            pyItems.any { !it.songmid.startsWith("artist:") }
+                        ) {
+                            { vm.pyPlayAll() }
+                        } else {
+                            null
+                        },
                     )
                     if (pyDetailLoading) {
                         CircularProgressIndicator(
@@ -1129,6 +1145,39 @@ private fun MusicOverlayList(
 }
 
 /**
+ * The 播放全部 pill at the top of a song list (v1.19.2, styled after
+ * Torres's reference screenshot): a filled primary capsule with a
+ * play glyph, left-aligned above the rows. Shared by the spider
+ * song list, the spider episode page and the chart detail, which
+ * used a plain icon-and-text row before.
+ */
+@Composable
+private fun PlayAllButton(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .padding(vertical = 8.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primary)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.player_ic_play),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = stringResource(R.string.music_play_all),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onPrimary,
+        )
+    }
+}
+
+/**
  * Full-screen episode list of a multi-episode spider vod (a singer,
  * an album, a playlist), rendered instead of the category content
  * (v1.18.1; this used to be a cramped picker dialog capped at
@@ -1172,6 +1221,15 @@ private fun PyEpisodeListContent(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 16.dp),
         ) {
+            // 播放全部 (v1.19.2): with a singer/album vod this page IS
+            // the song list, so it gets the same pill as the category
+            // lists. A single song's quality lines (2 rows) are not
+            // a list worth a play-all, so it only shows above that.
+            if (episodes.size > 2) {
+                item {
+                    PlayAllButton(onClick = { onPlay(0) })
+                }
+            }
             itemsIndexed(
                 episodes,
                 key = { index, _ -> index },
@@ -1276,6 +1334,7 @@ private fun PySpiderContent(
     onClearSearch: () -> Unit,
     onLoadMore: () -> Unit,
     onItemClick: (MusicTrack) -> Unit,
+    onPlayAll: (() -> Unit)?,
 ) {
     // The scroll states are parameters, hoisted into MusicPage:
     // this content leaves composition while the episode page is
@@ -1377,6 +1436,14 @@ private fun PySpiderContent(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(bottom = 16.dp),
                         ) {
+                            // 播放全部 pill (v1.19.2) above the song
+                            // rows; the page passes null on singer
+                            // grids and artist-only lists.
+                            if (onPlayAll != null) {
+                                item {
+                                    PlayAllButton(onClick = onPlayAll)
+                                }
+                            }
                             itemsIndexed(
                                 items,
                                 key = { index, _ -> index },
@@ -1469,17 +1536,28 @@ private fun PySingerCell(track: MusicTrack, onClick: () -> Unit) {
  * usual 0.45-alpha surface over a custom background, a soft
  * surfaceVariant tint otherwise), content centered.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TopRoundButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     Surface(
         modifier = modifier
             .size(40.dp)
             .clip(CircleShape)
-            .clickable(onClick = onClick),
+            .then(
+                if (onLongClick != null) {
+                    Modifier.combinedClickable(
+                        onClick = onClick,
+                        onLongClick = onLongClick,
+                    )
+                } else {
+                    Modifier.clickable(onClick = onClick)
+                },
+            ),
         shape = CircleShape,
         color = if (MusicAppearance.bgPath.isNotBlank()) {
             MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
@@ -1509,10 +1587,12 @@ private fun TopRoundButton(
 private fun VinylSourceButton(
     playing: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
     val description = stringResource(R.string.music_source_switch)
     TopRoundButton(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = Modifier.semantics { contentDescription = description },
     ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -1884,25 +1964,7 @@ private fun ChartDetailContent(
                         contentPadding = PaddingValues(bottom = 16.dp),
                     ) {
                         item {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onPlaySong(0) }
-                                    .padding(vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(
-                                    painter = painterResource(R.drawable.player_ic_play),
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(22.dp),
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                Text(
-                                    text = stringResource(R.string.music_play_all),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                )
-                            }
+                            PlayAllButton(onClick = { onPlaySong(0) })
                         }
                         itemsIndexed(
                             songs,

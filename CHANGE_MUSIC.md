@@ -1713,3 +1713,33 @@ Torres 试 v1.17.0 录屏后的三点反馈，全部在 MusicPage.kt。
   subPageOpen 壳层接线、py 内容分支与提升的滚动状态均未动。
   热门搜索词的空态分支保留在搜索内容里（无页签后不再有独立
   入口，仅作兜底渲染）。
+
+## v1.19.2 — 音源按钮长按刷新 + 歌曲列表「播放全部」胶囊按钮
+
+Torres 两点要求：① 左上角音源（黑胶）按钮加长按刷新站点；
+② 歌曲列表加「播放全部」按钮，并按他给的参考图做成列表左上方
+的胶囊样式。
+
+- 长按刷新（MusicViewModel.refreshCurrentSource）：py 源先
+  PyMusicBridge.clearCacheFor 清掉该源的 home/首页缓存，再
+  activatePy 重新激活——homeContent 与首个分类重新向爬虫取数，
+  不再回放 v1.17.0 的进程内缓存；爬虫实例本身保留（加载器只有
+  全量 clear，会误伤影视侧）。JS 源重新 initBridge 并按当前
+  内容重载（有关键词重搜、榜单模式 loadCharts(force = true)
+  强制重拉，loadCharts 为此加了 force 参数）。无源时无操作。
+  UI 侧 VinylSourceButton/TopRoundButton 加 onLongClick：
+  TopRoundButton 在有长按回调时改用 combinedClickable
+  （@OptIn ExperimentalFoundationApi，与 SearchScreens 先例
+  一致），短按开音源弹窗的行为不变；刷新完成沿用既有的
+  「音源已就绪」提示。
+- 播放全部：新增共享 PlayAllButton（主色填充胶囊 + 播放图标 +
+  music_play_all 文案），三处歌曲列表统一使用：
+  - py 分类/搜索歌曲列表（PySpiderContent 列表分支首行）：
+    MusicViewModel.pyPlayAll 把当前列表的歌曲行（过滤掉
+    artist: 开头的歌手行）整表作为队列从头播，每行在轮到时
+    懒解析，与单行点击的队列语义一致；页面在歌手平铺类、
+    纯歌手列表时传 null 不显示。
+  - py 选集页（歌手/专辑的歌单页）：episodes 超过 2 行时首行
+    出胶囊，点即 playEpisode(0)；单曲的 24bit/16bit 两行不显示。
+  - 榜单详情：原图标+文字行换成同一胶囊，行为不变
+    （onPlaySong(0)）。

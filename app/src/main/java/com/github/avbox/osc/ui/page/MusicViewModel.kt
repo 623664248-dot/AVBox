@@ -508,7 +508,11 @@ class MusicViewModel : ViewModel() {
      * working source (JS or py) stays selected and a toast gives the
      * reason. Returns whether spider mode was entered.
      */
-    private suspend fun activatePy(def: PyMusicSources.PyDef, persist: Boolean): Boolean {
+    private suspend fun activatePy(
+        def: PyMusicSources.PyDef,
+        persist: Boolean,
+        keepClass: Boolean = false,
+    ): Boolean {
         val context = AppContextHolder.context() ?: return false
         _scriptBusy.value = true
         return try {
@@ -523,9 +527,14 @@ class MusicViewModel : ViewModel() {
             if (persist) KV.put(KV_SCRIPT_ID, MusicTrack.PY_SOURCE_PREFIX + def.id)
             refreshScriptOptions(selectedId = MusicTrack.PY_SOURCE_PREFIX + def.id)
             _messages.tryEmit(str(R.string.music_script_ready, def.name))
-            val firstClass = home.classes.firstOrNull()
-            _selectedPyClass.value = firstClass?.id ?: ""
-            if (firstClass != null) {
+            // A refresh (keepClass) stays on the category the user
+            // is browsing when it still exists; activations from a
+            // switch or startup start at the first category.
+            val keepId = if (keepClass) _selectedPyClass.value else ""
+            val target = home.classes.firstOrNull { it.id == keepId }
+                ?: home.classes.firstOrNull()
+            _selectedPyClass.value = target?.id ?: ""
+            if (target != null) {
                 loadPyList(reset = true)
             } else {
                 // No categories: fall back to whatever homeContent listed.
@@ -590,6 +599,40 @@ class MusicViewModel : ViewModel() {
                 enterFallbackOrNoSource()
             } else {
                 refreshScriptOptions(selectedId = selectedScriptId())
+            }
+        }
+    }
+
+    /**
+     * Long-press on the top-left source (vinyl) button (v1.19.2):
+     * refreshes the CURRENT source in place — the user-facing
+     * "刷新站点". A py source drops its bridge-side home / page-1
+     * caches and re-runs activation, so homeContent and the first
+     * category are fetched from the spider again instead of replayed
+     * from the v1.17.0 cache; the spider instance itself is kept
+     * (the loader only offers an all-or-nothing clear, which would
+     * disturb the video side). A JS source re-inits its script and
+     * reloads the visible content (search results or charts). With
+     * no source imported there is nothing to refresh.
+     */
+    fun refreshCurrentSource() {
+        val def = currentPyDef
+        if (_pyActive.value && def != null) {
+            viewModelScope.launch {
+                PyMusicBridge.clearCacheFor(def.id)
+                activatePy(def, persist = false, keepClass = true)
+            }
+            return
+        }
+        val scriptId = LxBridge.loadedScriptId ?: return
+        viewModelScope.launch {
+            if (initBridge(scriptId)) {
+                if (lastKeyword.isNotEmpty() && _selectedSource.value.isNotEmpty()) {
+                    search(lastKeyword)
+                }
+                if (_mode.value == MusicMode.CHARTS) {
+                    loadCharts(force = true)
+                }
             }
         }
     }
@@ -717,6 +760,21 @@ class MusicViewModel : ViewModel() {
 
     fun consumePyPlay() {
         _pendingPyPlay.value = null
+    }
+
+    /**
+     * 播放全部 on a spider song list (v1.19.2): the current list's
+     * song rows become the play queue from the top; each row resolves
+     * lazily at its turn, exactly like the queue a single-row tap
+     * builds in [onPyTrackClick]. Singer rows (vod ids starting
+     * "artist:") are not songs — a singer's list lives behind its
+     * detail — so they are filtered out; with no song rows at all
+     * the call is a no-op (the page hides the button then anyway).
+     */
+    fun pyPlayAll() {
+        val queue = _pyItems.value.filterNot { it.songmid.startsWith("artist:") }
+        if (queue.isEmpty()) return
+        _pendingPyPlay.value = PyPlayRequest(queue, 0)
     }
 
     fun closeEpisodePage() {
@@ -869,7 +927,7 @@ class MusicViewModel : ViewModel() {
     }
 
     /** (Re)loads the chart catalog of the selected platform. */
-    fun loadCharts() {
+    fun loadCharts(force: Boolean = false) {
         val source = _selectedSource.value
         _selectedChart.value = null
         _chartSongs.value = emptyList()
@@ -878,7 +936,7 @@ class MusicViewModel : ViewModel() {
             chartsSource = ""
             return
         }
-        if (source == chartsSource && _charts.value.isNotEmpty()) return
+        if (!force && source == chartsSource && _charts.value.isNotEmpty()) return
         val seq = ++chartSeq
         _chartsLoading.value = true
         viewModelScope.launch {
