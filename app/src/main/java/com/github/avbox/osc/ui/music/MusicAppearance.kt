@@ -12,6 +12,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -487,6 +489,56 @@ fun MusicAppearanceSheet(
                             // No settings page to open on this ROM.
                         }
                     }
+                },
+            )
+            // Reference-player settings (v1.23.0, Torres's LX
+            // screenshots): preferred quality, resume position and
+            // the audio-focus behaviour.
+            var quality by remember { mutableStateOf(MusicPlayPrefs.quality) }
+            Text(
+                text = stringResource(R.string.music_quality_title),
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for (option in listOf("128k", "320k", "flac", "flac24bit")) {
+                    FilterChip(
+                        selected = quality == option,
+                        onClick = {
+                            quality = option
+                            MusicPlayPrefs.quality = option
+                        },
+                        label = { Text(option) },
+                    )
+                }
+            }
+            var rememberProgress by remember {
+                mutableStateOf(MusicPlayPrefs.rememberProgress)
+            }
+            PlaybackToggleRow(
+                title = stringResource(R.string.music_remember_progress),
+                desc = stringResource(R.string.music_remember_progress_desc),
+                checked = rememberProgress,
+                onCheckedChange = {
+                    rememberProgress = it
+                    MusicPlayPrefs.rememberProgress = it
+                },
+            )
+            var focusPause by remember {
+                mutableStateOf(MusicPlayPrefs.audioFocusPause)
+            }
+            PlaybackToggleRow(
+                title = stringResource(R.string.music_audio_focus_pause),
+                desc = stringResource(R.string.music_audio_focus_desc),
+                checked = focusPause,
+                onCheckedChange = {
+                    focusPause = it
+                    MusicPlayPrefs.audioFocusPause = it
                 },
             )
         }

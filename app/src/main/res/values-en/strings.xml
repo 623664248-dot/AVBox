@@ -241,6 +241,11 @@
     <string name="music_playback_section">Playback</string>
     <string name="music_floating_mini">Round floating mini player</string>
     <string name="music_floating_mini_desc">When on, a floating disc stays over other apps while music plays after you leave; drag to move, tap to pause/play</string>
+    <string name="music_quality_title">Preferred quality</string>
+    <string name="music_remember_progress">Remember playback position</string>
+    <string name="music_remember_progress_desc">Re-playing the same song resumes where it left off</string>
+    <string name="music_audio_focus_pause">Pause when other apps play audio</string>
+    <string name="music_audio_focus_desc">Pause for calls and other audio, resume after; off plays over other apps (applies after an app restart)</string>
     <string name="music_floating_mini_permission">The overlay permission is needed — the settings page is open; turn on AVBox\'s switch and come back</string>
     <string name="music_source_switch">Source</string>
     <string name="music_script_loading">Loading music source…</string>

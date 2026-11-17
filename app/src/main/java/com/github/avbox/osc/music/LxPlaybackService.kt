@@ -269,7 +269,7 @@ class LxPlaybackService : Service() {
                 .setUsage(C.USAGE_MEDIA)
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .build(),
-            true,
+            MusicPlayPrefs.audioFocusPause,
         )
         player.addListener(nowPlayingListener)
         exo = player

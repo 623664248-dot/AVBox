@@ -40,6 +40,7 @@ import com.github.avbox.osc.music.LxPlaybackService
 import com.github.avbox.osc.music.LyricMatcher
 import com.github.avbox.osc.music.MusicApi
 import com.github.avbox.osc.music.MusicCrashLog
+import com.github.avbox.osc.music.MusicPlayPrefs
 import com.github.avbox.osc.music.MusicServiceConnection
 import com.github.avbox.osc.music.NowPlayingState
 import com.github.avbox.osc.music.MusicTrack
@@ -191,6 +192,9 @@ class LxMusicPlayerActivity : BaseActivity() {
      */
     private val fallbackTried = mutableSetOf<String>()
     private var fallbackSongKey: String = ""
+
+    /** Resume point to seek to once the current start is READY. */
+    private var pendingResumeMs: Long = 0L
     private var lyricJob: Job? = null
     private var tickerJob: Job? = null
     private var colorJob: Job? = null
@@ -249,8 +253,19 @@ class LxMusicPlayerActivity : BaseActivity() {
             state.buffering = playbackState == Player.STATE_BUFFERING
             if (playbackState == Player.STATE_READY) {
                 ensureEffects()
+                if (pendingResumeMs > 0L) {
+                    val resumeAt = pendingResumeMs
+                    pendingResumeMs = 0L
+                    try {
+                        activePlayer()?.seekTo(resumeAt)
+                    } catch (t: Throwable) {
+                        // Player went away mid-seek; the song just
+                        // plays from the top.
+                    }
+                }
             }
             if (playbackState == Player.STATE_ENDED) {
+                MusicPlayPrefs.clearResume()
                 advanceAuto()
             }
         }
@@ -427,6 +442,7 @@ class LxMusicPlayerActivity : BaseActivity() {
             }
         }
         tickerJob = lifecycleScope.launch {
+            var resumeTick = 0
             while (true) {
                 val target = activePlayer()
                 if (target != null) {
@@ -444,6 +460,22 @@ class LxMusicPlayerActivity : BaseActivity() {
                 // it healed.
                 ensureVisualizer()
                 checkSleepTimer()
+                // Resume-point saving (v1.23.0): throttled to every
+                // ~5 s of beats, only while mid-song, so re-playing
+                // the same song later can pick up where it stopped.
+                if (MusicPlayPrefs.rememberProgress && state.playing) {
+                    resumeTick++
+                    if (resumeTick >= 12) {
+                        resumeTick = 0
+                        val cur = state.current
+                        val pos = state.positionMs
+                        if (cur != null && pos > 3_000L &&
+                            (state.durationMs <= 0L || pos < state.durationMs - 5_000L)
+                        ) {
+                            MusicPlayPrefs.saveResume(NowPlayingState.keyOf(cur), pos)
+                        }
+                    }
+                }
                 delay(400)
             }
         }
@@ -559,7 +591,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                 .setUsage(C.USAGE_MEDIA)
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .build(),
-            true,
+            MusicPlayPrefs.audioFocusPause,
         )
         exo.repeatMode = if (state.loopMode == LxLoopMode.SINGLE) {
             Player.REPEAT_MODE_ONE
@@ -581,6 +613,11 @@ class LxMusicPlayerActivity : BaseActivity() {
         if (songKey != fallbackSongKey) {
             fallbackSongKey = songKey
             fallbackTried.clear()
+        }
+        pendingResumeMs = if (MusicPlayPrefs.rememberProgress) {
+            MusicPlayPrefs.resumePositionFor(NowPlayingState.keyOf(track))
+        } else {
+            0L
         }
         // Play history (v1.18.0): every real start through playAt is
         // recorded — fresh starts, prev/next and auto-advance alike.
@@ -658,7 +695,7 @@ class LxMusicPlayerActivity : BaseActivity() {
             return resolved.url
         }
         currentHeaders = emptyMap()
-        val url = LxBridge.getMusicUrl(track)
+        val url = LxBridge.getMusicUrl(track, MusicPlayPrefs.quality)
         if (state.index == index) {
             state.currentUrl = url
             state.qualityText = LxBridge.lastResolvedQuality()?.uppercase() ?: ""
@@ -1412,7 +1449,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                     }
 
                     else -> {
-                        url = cachedUrl ?: LxBridge.getMusicUrl(track)
+                        url = cachedUrl ?: LxBridge.getMusicUrl(track, MusicPlayPrefs.quality)
                         headers = emptyMap()
                     }
                 }

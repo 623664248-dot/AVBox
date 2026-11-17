@@ -241,6 +241,11 @@
     <string name="music_playback_section">播放</string>
     <string name="music_floating_mini">圓形迷你播放器</string>
     <string name="music_floating_mini_desc">開啟後，離開應用時顯示懸浮圓盤，蓋在其他應用上面播放；可拖動，點按暫停/播放</string>
+    <string name="music_quality_title">優先音質</string>
+    <string name="music_remember_progress">記住播放進度</string>
+    <string name="music_remember_progress_desc">再次播放同一首歌時從上次的位置繼續</string>
+    <string name="music_audio_focus_pause">其他應用播放聲音時自動暫停</string>
+    <string name="music_audio_focus_desc">來電、語音等聲音響起時先暫停，結束後恢復；關閉後與其他應用同時出聲（重啟應用後生效）</string>
     <string name="music_floating_mini_permission">需要懸浮窗權限，已為你打開設定頁，打開 AVBox 的開關後回來即可</string>
     <string name="music_source_switch">音源</string>
     <string name="music_script_loading">音源腳本載入中…</string>
