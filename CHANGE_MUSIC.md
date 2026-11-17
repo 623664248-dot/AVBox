@@ -1507,3 +1507,37 @@ Torres 试 v1.17.0 录屏后的三点反馈，全部在 MusicPage.kt。
 - 范围：选集流程只存在于 py 模式（episodePage 只在
   onPyTrackClick 里置位），JS 模式未触碰。旧字符串
   music_py_choose_episode 资源保留未删，页面不再引用。
+
+
+## v1.18.2 — 多功能入口改悬浮展开球
+
+- 背景：v1.18.0 的多功能入口是顶栏右端按钮 + 「更多功能」
+  底部弹窗；Torres 对照他发来的参考 app 截图（右下角一颗悬浮
+  球，点开向上展开成一列带标签的圆形按钮）问「能不能这种
+  方式」，故改成同款悬浮展开球。
+- 删除：顶栏右端的多功能按钮撤掉，顶栏恢复为唱片按钮 + 搜索
+  框（占满剩余宽度）；「更多功能」底部弹窗与 MusicMenuRow
+  一并删除，AVBoxBottomSheet 在本页不再使用（import 同删）。
+- 新增 MusicMultiFab（MusicPage.kt 内私有 Composable），挂在
+  内容根 Box 最上层（迷你播放条之后），JS / py 两种模式都在：
+  收起时是 48dp 深色半透明圆球（沿用 v1.9.1 悬浮按钮的黑
+  55% 底 + 6dp 阴影），白色 ic_music_more 图标；收起状态只
+  拦截球自身的触摸，不挡页面。
+- 展开：点球展开 3 个 44dp 圆形按钮（同款深色底 + 白色图标
+  + 深色小标签片）：外观 / 我的收藏 / 播放记录，动作与
+  v1.18.0 菜单一字不变（外观 → appearanceOpen = true、收藏
+  → vm.openFavorites()、记录 → vm.openHistory()）。球在页面
+  下半部向上展开、在上半部向下展开；标签在球靠屏幕边缘的
+  反侧，保证不出屏。展开时铺一层透明 scrim（无变暗、无
+  涟漪），点 scrim / 点球 / 点任一项都收起，点中某项先收起
+  再执行动作。
+- 拖动：沿用 v1.9.1 验证过的单循环手势（awaitEachGesture +
+  awaitFirstDown + positionChange，累计位移 < 8dp 判点击，
+  ≥ 8dp 为拖动且自动收起展开态），范围钳制在内容区实测尺寸
+  内（根 Box 新增 onSizeChanged 量尺寸）。位置持久化用新
+  KV 键 music_multi_fab_pos（"x,y" px，读带 "" 默认）。
+  默认位置：内容区右下角（右边距 16dp），底边距抬高到
+  76dp，避开迷你播放条（56dp + 4dp 底距）的条带。
+- 字符串未新增：球与三项文案复用 music_menu_more /
+  music_appearance / music_favorites_title /
+  music_menu_history。

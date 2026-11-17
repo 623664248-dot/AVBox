@@ -18,6 +18,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -31,6 +34,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -83,7 +87,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -94,6 +101,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
@@ -111,7 +120,6 @@ import com.github.avbox.osc.music.NowPlayingState
 import com.github.avbox.osc.music.PyMusicBridge
 import com.github.avbox.osc.music.PyMusicSources
 import com.github.avbox.osc.ui.components.AVBoxAlertDialog
-import com.github.avbox.osc.ui.components.AVBoxBottomSheet
 import com.github.avbox.osc.ui.music.LxLoopMode
 import com.github.avbox.osc.ui.music.LxMusicPlayerActivity
 import com.github.avbox.osc.ui.music.MusicAppearance
@@ -119,6 +127,7 @@ import com.github.avbox.osc.ui.music.MusicAppearanceSheet
 import com.github.avbox.osc.ui.music.MusicBackground
 import com.github.avbox.osc.util.KV
 import java.io.File
+import kotlin.math.roundToInt
 import kotlin.random.Random
 import kotlinx.coroutines.launch
 
@@ -162,7 +171,11 @@ fun MusicPage(
     var query by rememberSaveable { mutableStateOf("") }
     var scriptDialogOpen by remember { mutableStateOf(false) }
     var appearanceOpen by remember { mutableStateOf(false) }
-    var menuOpen by remember { mutableStateOf(false) }
+
+    // Measured size of the padded content box below: the floating
+    // multi-function ball (v1.18.2) clamps its drag range and picks
+    // its default corner / expand direction from it.
+    var pageSize by remember { mutableStateOf(IntSize.Zero) }
 
     // Spider category list/grid scroll states are hoisted here,
     // above the content branch chain: the episode page and the
@@ -265,18 +278,19 @@ fun MusicPage(
             .fillMaxSize()
             .padding(contentPadding)
             .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp)
+            .onSizeChanged { pageSize = it },
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Spacer(Modifier.height(12.dp))
-            // Top row: the vinyl source button, the search field and the
-            // multi-function menu entry. Both round buttons are 40dp with equal
-            // 8dp spacing, so the field between them stays centered. The
-            // field lives here in both native and spider mode (it used to
-            // sit inside the mode contents below); its query state, IME
-            // search action and pill styling are unchanged, only the
-            // search target differs (native search switches to the
-            // search mode first so the results stay visible).
+            // Top row: the vinyl source button and the search field.
+            // The field lives here in both native and spider mode (it
+            // used to sit inside the mode contents below); its query
+            // state, IME search action and pill styling are unchanged,
+            // only the search target differs (native search switches
+            // to the search mode first so the results stay visible).
+            // Appearance / favourites / history left this row in
+            // v1.18.2 for the floating multi-function ball below.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -301,16 +315,6 @@ fun MusicPage(
                     },
                     modifier = Modifier.weight(1f),
                 )
-                // Multi-function entry (v1.18.0): appearance, favourites
-                // and play history live behind this one button's menu;
-                // the palette no longer opens the sheet directly.
-                TopRoundButton(onClick = { menuOpen = true }) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_music_more),
-                        contentDescription = stringResource(R.string.music_menu_more),
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
             }
 
             // Second row: the platform chips act as the resource-site
@@ -693,6 +697,19 @@ fun MusicPage(
                 )
             }
         }
+
+        // Floating multi-function ball (v1.18.2): the appearance /
+        // favourites / history entry, moved off the top row. It is
+        // the last child of this box, so it floats above the content
+        // and the mini bar (sheets and dialogs live in their own
+        // windows, still above it), in both native and spider mode.
+        MusicMultiFab(
+            rootWidthPx = pageSize.width,
+            rootHeightPx = pageSize.height,
+            onAppearance = { appearanceOpen = true },
+            onFavorites = { vm.openFavorites() },
+            onHistory = { vm.openHistory() },
+        )
     }
     }
 
@@ -764,49 +781,6 @@ fun MusicPage(
         )
     }
 
-    if (menuOpen) {
-        // The top-right button's menu (v1.18.0): appearance moved in
-        // here from its old direct button; favourites and history open
-        // through the ViewModel (mode in native mode, overlay in
-        // spider mode for favourites; overlay in both for history).
-        AVBoxBottomSheet(
-            onDismissRequest = { menuOpen = false },
-            title = stringResource(R.string.music_menu_more),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp)
-                    .padding(bottom = 24.dp),
-            ) {
-                MusicMenuRow(
-                    iconRes = R.drawable.ic_settings_theme,
-                    label = stringResource(R.string.music_appearance),
-                    onClick = {
-                        menuOpen = false
-                        appearanceOpen = true
-                    },
-                )
-                MusicMenuRow(
-                    iconRes = R.drawable.ic_favorite,
-                    label = stringResource(R.string.music_favorites_title),
-                    onClick = {
-                        menuOpen = false
-                        vm.openFavorites()
-                    },
-                )
-                MusicMenuRow(
-                    iconRes = R.drawable.ic_tab_history,
-                    label = stringResource(R.string.music_menu_history),
-                    onClick = {
-                        menuOpen = false
-                        vm.openHistory()
-                    },
-                )
-            }
-        }
-    }
-
     if (appearanceOpen) {
         MusicAppearanceSheet(
             onDismissRequest = { appearanceOpen = false },
@@ -816,29 +790,260 @@ fun MusicPage(
 
 }
 
-/** One icon + label action row of the top-right multi-function menu. */
+/** KV key of the multi-function ball's persisted position ("x,y" px). */
+private const val MUSIC_MULTI_FAB_POS_KEY = "music_multi_fab_pos"
+
+/**
+ * The music page's multi-function entry since v1.18.2: a floating
+ * ball in the style of the reference app Torres screenshotted,
+ * replacing the v1.18.0 top-right button + bottom-sheet menu. The
+ * three actions are the v1.18.0 ones, unchanged — appearance,
+ * favourites, play history — only the entry point moved.
+ *
+ * Collapsed it is a 48dp dark translucent ball (the v1.9.1 source
+ * FAB's black 55% + shadow styling) that only intercepts touches
+ * on itself. It drags with the same single-loop gesture tracker
+ * that FAB proved on this page: accumulated travel under 8dp on
+ * release is a tap, anything more is a drag (which also collapses
+ * the expanded stack). The drag clamps to the measured root size
+ * and the resting position persists in KV. A tap expands three
+ * 44dp action buttons towards the page centre — upward when the
+ * ball sits in the bottom half, downward otherwise — over a
+ * transparent, ripple-free scrim; tapping the scrim, the ball or
+ * an item collapses the stack, and an item tap invokes its action
+ * after collapsing.
+ */
 @Composable
-private fun MusicMenuRow(
+private fun MusicMultiFab(
+    rootWidthPx: Int,
+    rootHeightPx: Int,
+    onAppearance: () -> Unit,
+    onFavorites: () -> Unit,
+    onHistory: () -> Unit,
+) {
+    if (rootWidthPx <= 0 || rootHeightPx <= 0) return
+    val density = LocalDensity.current
+    val ballSizePx = with(density) { 48.dp.toPx() }
+    val itemSizePx = with(density) { 44.dp.toPx() }
+    val gapPx = with(density) { 12.dp.toPx() }
+    val tapSlopPx = with(density) { 8.dp.toPx() }
+
+    var expanded by remember { mutableStateOf(false) }
+    // Restored once from KV; NaN keeps the default corner until the
+    // user drags the ball for the first time.
+    val restored = remember {
+        val raw: String = KV.get(MUSIC_MULTI_FAB_POS_KEY, "")
+        val parts = raw.split(",")
+        val x = parts.getOrNull(0)?.toFloatOrNull()
+        val y = parts.getOrNull(1)?.toFloatOrNull()
+        if (x != null && y != null) x to y else null
+    }
+    var offsetX by remember { mutableStateOf(restored?.first ?: Float.NaN) }
+    var offsetY by remember { mutableStateOf(restored?.second ?: Float.NaN) }
+
+    val maxX = (rootWidthPx - ballSizePx).coerceAtLeast(0f)
+    val maxY = (rootHeightPx - ballSizePx).coerceAtLeast(0f)
+    val curX = if (offsetX.isNaN()) {
+        (rootWidthPx - ballSizePx - with(density) { 16.dp.toPx() })
+            .coerceIn(0f, maxX)
+    } else {
+        offsetX.coerceIn(0f, maxX)
+    }
+    val curY = if (offsetY.isNaN()) {
+        // Bottom-right of the content area (the old FAB's corner),
+        // raised above the mini player bar's strip — 56dp bar plus
+        // its 4dp bottom padding, with a small gap — so the default
+        // spot never covers the bar when it appears.
+        (rootHeightPx - ballSizePx - with(density) { 76.dp.toPx() })
+            .coerceIn(0f, maxY)
+    } else {
+        offsetY.coerceIn(0f, maxY)
+    }
+    // The gesture loop below outlives individual recompositions;
+    // it must start each drag from the ball's current spot, not
+    // from the position captured when the pointer input was set up.
+    val curXState by rememberUpdatedState(curX)
+    val curYState by rememberUpdatedState(curY)
+    val expandUp = curY + ballSizePx / 2f >= rootHeightPx / 2f
+    val labelsFirst = curX + ballSizePx / 2f >= rootWidthPx / 2f
+    val moreDescription = stringResource(R.string.music_menu_more)
+
+    if (expanded) {
+        // Transparent scrim: catches the collapse tap anywhere on
+        // the page without dimming it and without a ripple.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { expanded = false },
+        )
+    }
+
+    Box(
+        modifier = Modifier
+            .offset { IntOffset(curX.roundToInt(), curY.roundToInt()) }
+            .size(48.dp),
+    ) {
+        if (expanded) {
+            val items = listOf(
+                Triple(R.drawable.ic_settings_theme, R.string.music_appearance, onAppearance),
+                Triple(R.drawable.ic_favorite, R.string.music_favorites_title, onFavorites),
+                Triple(R.drawable.ic_tab_history, R.string.music_menu_history, onHistory),
+            )
+            items.forEachIndexed { index, item ->
+                val (iconRes, labelRes, action) = item
+                // Item 0 sits nearest the ball; the stack grows
+                // away from it towards the page centre. The rows
+                // are wider than this 48dp anchor box and extend
+                // past it (Compose does not clip children to the
+                // parent's bounds), towards the side the ball is
+                // NOT on, so the labels stay on screen.
+                val itemY = if (expandUp) {
+                    -(index + 1) * (itemSizePx + gapPx)
+                } else {
+                    ballSizePx + gapPx + index * (itemSizePx + gapPx)
+                }
+                MusicMultiFabItem(
+                    iconRes = iconRes,
+                    label = stringResource(labelRes),
+                    labelsFirst = labelsFirst,
+                    onClick = {
+                        expanded = false
+                        action()
+                    },
+                    modifier = Modifier
+                        .align(
+                            if (labelsFirst) Alignment.TopEnd else Alignment.TopStart,
+                        )
+                        .offset { IntOffset(0, itemY.roundToInt()) },
+                )
+            }
+        }
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .semantics {
+                    contentDescription = moreDescription
+                }
+                .pointerInput(rootWidthPx, rootHeightPx) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        down.consume()
+                        val startX = curXState
+                        val startY = curYState
+                        var travel = 0f
+                        var deltaX = 0f
+                        var deltaY = 0f
+                        var dragging = false
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes
+                                .firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            change.consume()
+                            val delta = change.positionChange()
+                            travel += delta.getDistance()
+                            deltaX += delta.x
+                            deltaY += delta.y
+                            if (!dragging && travel >= tapSlopPx) {
+                                dragging = true
+                                expanded = false
+                            }
+                            if (dragging) {
+                                offsetX = (startX + deltaX).coerceIn(0f, maxX)
+                                offsetY = (startY + deltaY).coerceIn(0f, maxY)
+                            }
+                        }
+                        if (dragging) {
+                            KV.put(
+                                MUSIC_MULTI_FAB_POS_KEY,
+                                "$offsetX,$offsetY",
+                            )
+                        } else if (travel < tapSlopPx) {
+                            // A tap toggles the stack; the few px of
+                            // finger drift never moved the ball, so
+                            // there is nothing to roll back.
+                            expanded = !expanded
+                        }
+                    }
+                },
+            shape = CircleShape,
+            color = Color.Black.copy(alpha = 0.55f),
+            shadowElevation = 6.dp,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_music_more),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One expanded action of the multi-function ball: a 44dp dark
+ * circle with a white icon and a small dark label chip beside it
+ * (on the side away from the screen edge the ball rests against).
+ */
+@Composable
+private fun MusicMultiFabItem(
     iconRes: Int,
     label: String,
+    labelsFirst: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
+        modifier = modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = onClick,
+        ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            painter = painterResource(iconRes),
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-        )
-        Spacer(Modifier.width(16.dp))
+        if (labelsFirst) {
+            MusicMultiFabLabel(label)
+            Spacer(Modifier.width(8.dp))
+        }
+        Surface(
+            shape = CircleShape,
+            color = Color.Black.copy(alpha = 0.55f),
+            shadowElevation = 6.dp,
+            modifier = Modifier.size(44.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    painter = painterResource(iconRes),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        if (!labelsFirst) {
+            Spacer(Modifier.width(8.dp))
+            MusicMultiFabLabel(label)
+        }
+    }
+}
+
+/** The small dark pill carrying an expanded ball item's label. */
+@Composable
+private fun MusicMultiFabLabel(text: String) {
+    Surface(
+        shape = RoundedCornerShape(percent = 50),
+        color = Color.Black.copy(alpha = 0.55f),
+    ) {
         Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge,
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
         )
     }
 }

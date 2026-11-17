@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Multi-function menu entry of the music page top row: a 2x2 grid
-     of rounded squares. The fill matches ic_settings_theme (the
-     palette drawable it replaces in that slot), which the round
-     button renders untinted. -->
+<!-- Multi-function entry of the music page: a 2x2 grid of rounded
+     squares. Since v1.18.2 it marks the floating expandable ball,
+     whose Icon renders it tinted white over the dark ball; the
+     baked fill matches ic_settings_theme. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
