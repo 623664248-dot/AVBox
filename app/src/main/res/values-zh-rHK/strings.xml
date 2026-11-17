@@ -149,6 +149,12 @@
     <string name="music_mode_shuffle">隨機播放</string>
     <string name="music_favorites_title">我的收藏</string>
     <string name="music_favorites_empty">暫無收藏</string>
+    <string name="music_menu_more">更多功能</string>
+    <string name="music_menu_history">播放記錄</string>
+    <string name="music_history_empty">暫無播放記錄</string>
+    <string name="music_history_clear">清空</string>
+    <string name="music_import_entry">導入音源</string>
+    <string name="music_import_unknown">無法識別這個文件</string>
     <string name="music_favorite_add">收藏</string>
     <string name="music_favorite_remove">取消收藏</string>
     <string name="music_download">下載</string>

@@ -276,6 +276,12 @@
     <string name="music_mode_shuffle">Shuffle</string>
     <string name="music_favorites_title">My favourites</string>
     <string name="music_favorites_empty">No favourites yet</string>
+    <string name="music_menu_more">More</string>
+    <string name="music_menu_history">Play history</string>
+    <string name="music_history_empty">No play history yet</string>
+    <string name="music_history_clear">Clear</string>
+    <string name="music_import_entry">Import source</string>
+    <string name="music_import_unknown">Unrecognized file</string>
     <string name="music_favorite_add">Add to favourites</string>
     <string name="music_favorite_remove">Remove from favourites</string>
     <string name="music_download">Download</string>

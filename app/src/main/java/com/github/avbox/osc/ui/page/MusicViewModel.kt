@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.github.avbox.osc.R
 import com.github.avbox.osc.music.LxBridge
 import com.github.avbox.osc.music.LxFavorites
+import com.github.avbox.osc.music.LxPlayHistory
 import com.github.avbox.osc.music.LxUserScripts
 import com.github.avbox.osc.music.MusicApi
 import com.github.avbox.osc.music.MusicChart
@@ -27,6 +28,14 @@ import kotlinx.coroutines.withContext
 
 /** Music tab content mode: platform search, per-platform charts, favourites. */
 enum class MusicMode { SEARCH, CHARTS, FAVORITES }
+
+/**
+ * A list shown instead of the mode content, opened from the top-row
+ * multi-function menu. Favourites need this in spider mode (the mode
+ * row is hidden there, so the FAVORITES mode is unreachable); history
+ * uses it in both modes instead of growing a fourth mode chip.
+ */
+enum class MusicListOverlay { FAVORITES, HISTORY }
 
 /**
  * Music tab state: owns the LX source bridge lifecycle (user-imported
@@ -95,6 +104,14 @@ class MusicViewModel : ViewModel() {
 
     private val _favorites = MutableStateFlow<List<MusicTrack>>(emptyList())
     val favorites: StateFlow<List<MusicTrack>> = _favorites.asStateFlow()
+
+    /** Menu-opened list overlay; null shows the regular mode content. */
+    private val _listOverlay = MutableStateFlow<MusicListOverlay?>(null)
+    val listOverlay: StateFlow<MusicListOverlay?> = _listOverlay.asStateFlow()
+
+    /** Snapshot of [LxPlayHistory] taken when the history overlay opens. */
+    private val _playHistory = MutableStateFlow<List<MusicTrack>>(emptyList())
+    val playHistory: StateFlow<List<MusicTrack>> = _playHistory.asStateFlow()
 
     private val _chartSongsLoading = MutableStateFlow(false)
     val chartSongsLoading: StateFlow<Boolean> = _chartSongsLoading.asStateFlow()
@@ -350,6 +367,73 @@ class MusicViewModel : ViewModel() {
                     KV.put(KV_SCRIPT_ID, previousId)
                 }
             }
+        }
+    }
+
+    /**
+     * The 音源 dialog's single import entry (v1.18.0): decides whether
+     * the picked file is a JS source or a py spider and routes to the
+     * matching existing import below. The extension wins when present;
+     * otherwise the head of the file is sniffed for the spider markers
+     * or the LX registration signs [LxUserScripts] validates against.
+     * An unrecognized file only toasts and changes nothing.
+     */
+    fun importSource(uri: Uri) {
+        val context = AppContextHolder.context() ?: return
+        viewModelScope.launch {
+            val name = withContext(Dispatchers.IO) {
+                queryDisplayName(context, uri)
+            }
+            val lower = name.lowercase()
+            when {
+                lower.endsWith(".py") -> importPyScript(uri)
+                lower.endsWith(".js") -> importScript(uri)
+                else -> {
+                    val head = withContext(Dispatchers.IO) {
+                        readHeadText(context, uri)
+                    }
+                    when {
+                        head.contains("base.spider") || head.contains("class Spider") ->
+                            importPyScript(uri)
+                        LX_SCRIPT_SIGNS.any { head.contains(it) } ->
+                            importScript(uri)
+                        else -> _messages.tryEmit(str(R.string.music_import_unknown))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun queryDisplayName(context: android.content.Context, uri: Uri): String {
+        var name = ""
+        try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (index >= 0) name = cursor.getString(index) ?: ""
+                }
+            }
+        } catch (e: Exception) {
+            // No name: the content sniff below decides instead.
+        }
+        return name
+    }
+
+    /** First chunk of the picked file as text; "" when unreadable. */
+    private fun readHeadText(context: android.content.Context, uri: Uri): String {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val buffer = ByteArray(SNIFF_BYTES)
+                var total = 0
+                while (total < buffer.size) {
+                    val read = input.read(buffer, total, buffer.size - total)
+                    if (read < 0) break
+                    total += read
+                }
+                String(buffer, 0, total, Charsets.UTF_8).removePrefix("\uFEFF")
+            } ?: ""
+        } catch (e: Exception) {
+            ""
         }
     }
 
@@ -727,6 +811,40 @@ class MusicViewModel : ViewModel() {
         _favorites.value = LxFavorites.load()
     }
 
+    // ------------------------------------------------------------- menu lists
+
+    /**
+     * Menu entry 歌曲收藏： native mode keeps the existing FAVORITES
+     * mode; spider mode has no mode row, so the same list opens as an
+     * overlay over the spider content instead.
+     */
+    fun openFavorites() {
+        loadFavorites()
+        if (_pyActive.value) {
+            _listOverlay.value = MusicListOverlay.FAVORITES
+        } else {
+            selectMode(MusicMode.FAVORITES)
+        }
+    }
+
+    /** Menu entry 播放记录： an overlay in both modes (no fourth chip). */
+    fun openHistory() {
+        val context = AppContextHolder.context() ?: return
+        _playHistory.value = LxPlayHistory.all(context)
+        _listOverlay.value = MusicListOverlay.HISTORY
+    }
+
+    fun closeOverlay() {
+        _listOverlay.value = null
+    }
+
+    /** 清空 on the history overlay: wipes the store and the snapshot. */
+    fun clearHistory() {
+        val context = AppContextHolder.context() ?: return
+        LxPlayHistory.clear(context)
+        _playHistory.value = emptyList()
+    }
+
     /** (Re)loads the chart catalog of the selected platform. */
     fun loadCharts() {
         val source = _selectedSource.value
@@ -780,6 +898,13 @@ class MusicViewModel : ViewModel() {
 
     companion object {
         private const val KV_SCRIPT_ID = "lx_music_script_id"
+
+        /** How much of a picked file the import dispatch sniffs. */
+        private const val SNIFF_BYTES = 64 * 1024
+
+        /** The LX registration signs [LxUserScripts] validates against. */
+        private val LX_SCRIPT_SIGNS =
+            listOf("globalThis.lx", "EVENT_NAMES", "lx.on(", "lx.send(", "window.lx")
         private val SOURCE_ORDER = listOf("kg", "kw", "tx", "wy", "mg")
         private val SEARCHABLE_SOURCES = setOf("kg", "kw", "tx", "wy")
     }

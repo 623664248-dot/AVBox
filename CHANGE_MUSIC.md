@@ -1407,3 +1407,75 @@ Torres 试 v1.17.0 录屏后的三点反馈，全部在 MusicPage.kt。
   区间参数名是 trackRange 而非 valueRange（已查 material3
   1.5.0-alpha29 官方 sources jar 核实），构造调用改用
   trackRange 后重推。
+
+## v1.18.0 — 顶栏多功能菜单（外观/收藏/播放记录）+ 播放历史 + 音源统一导入
+
+### 1. 右上角多功能按钮
+
+- 顶栏右端的调色盘按钮换成多功能按钮（新图标
+  `ic_music_more`：2x2 圆角方块网格，与被替换的
+  `ic_settings_theme` 同色填充），仍是同一个 TopRoundButton
+  槽位（40dp、搜索栏右端）。点开是一个 AVBoxBottomSheet
+  菜单，三行图标+文字：
+  - 外观设置：打开原有的外观设置 sheet（与调色盘旧行为完全
+    一致，页面里只剩菜单这一处打开点）；
+  - 歌曲收藏：见第 2 点；
+  - 播放记录：见第 3 点。
+- 左侧唱片按钮、搜索栏、其余顶栏元素未动。
+
+### 2. 歌曲收藏在 py 模式下也可达
+
+- 原生模式下收藏是模式行里的第三个 chip（MusicMode.FAVORITES），
+  py 源激活时模式行隐藏，收藏列表无从进入。本版给
+  MusicViewModel 加了 `listOverlay` 状态（null / FAVORITES /
+  HISTORY）与 open/close 函数：菜单点「歌曲收藏」时，原生
+  模式仍走既有 selectMode(FAVORITES)；py 模式置
+  overlay=FAVORITES，MusicPage 在内容区改为渲染 overlay
+  列表（标题栏 + 关闭按钮 + 与原生收藏相同的行与点播行为：
+  整表为队列点歌），不再渲染 PySpiderContent。系统返回键
+  也可关闭 overlay。
+
+### 3. 播放记录（新功能）
+
+- 新增 `music/LxPlayHistory.kt`，与 LxFavorites 同样的存储
+  方式：KV 键 `lx_play_history`（读写均带 "" 默认值），
+  MusicTrack 的 JSON 数组，最近播放在最前，按与收藏相同
+  的键（source|songmid，py 剧集再加 pyEpId）去重，上限
+  100 条。API：all / record / clear。
+- 记录点在 LxMusicPlayerActivity.playAt()：每次真正开始播
+  一首就记一次（JS 与 py 歌曲一视同仁，含切歌与自动连播）。
+  attach 路径（tryAttach 成功绑定既有会话）不经过 playAt，
+  不会重复记录。
+- 菜单「播放记录」在两种模式下都走 overlay=HISTORY（不加
+  第四个模式 chip）。列表与收藏 overlay 共用渲染：点行以
+  整表为队列播放；标题栏带「清空」（清完列表即空）与关闭
+  按钮；空态文案「暂无播放记录」。
+- 已知限制：迷你播放条 / 播放服务侧的下一首不经过 playAt
+  （页面侧 service next 直接换歌），这类切歌不会被记录；
+  播放页内的切歌与连播都经过 playAt，记录完整。
+
+### 4. 音源统一导入
+
+- 音源对话框原来有两个导入入口（「导入音源脚本」给 JS、
+  「导入 py 音源」给 py），本版合并为一个「导入音源」：
+  一个文件选择器（mime 取两边旧列表的并集，仍以 */* 兜底）。
+- 选中文件后由 MusicViewModel.importSource 分发：文件名以
+  .py 结尾 → py 源；以 .js 结尾 → JS 源；都没有后缀时读
+  文件头 64KB 嗅探内容——含 base.spider / class Spider 等
+  爬虫标记 → py；含 LxUserScripts 校验所用的 LX 注册标记
+  （globalThis.lx / EVENT_NAMES / lx.on( / lx.send( /
+  window.lx）→ JS；两者都不含则只弹「无法识别这个文件」
+  并中止，不改任何东西。
+- 分发后走的仍是既有的两个导入实现（LxUserScripts /
+  PyMusicSources），各自只剩这一条调用路径。v1.17.0 的行为
+  保留：导入成功后对话框自动关闭回音乐主页、新源自动尝试
+  启用、初始化失败回退到之前的源。
+
+### 5. 新增字符串（×4 语言）
+
+- music_menu_more（更多功能）、music_menu_history（播放
+  记录）、music_history_empty（暂无播放记录）、
+  music_history_clear（清空）、music_import_entry（导入
+  音源）、music_import_unknown（无法识别这个文件）。
+  收藏与外观的菜单文案复用既有 music_favorites_title /
+  music_appearance，未新增。

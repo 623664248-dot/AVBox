@@ -30,6 +30,7 @@ import coil3.toBitmap
 import com.github.avbox.osc.R
 import com.github.avbox.osc.music.LxBridge
 import com.github.avbox.osc.music.LxFavorites
+import com.github.avbox.osc.music.LxPlayHistory
 import com.github.avbox.osc.music.LxPlaybackService
 import com.github.avbox.osc.music.LyricMatcher
 import com.github.avbox.osc.music.MusicApi
@@ -485,6 +486,11 @@ class LxMusicPlayerActivity : BaseActivity() {
         state.index = index
         lastIndex = index
         val track = queue[index]
+        // Play history (v1.18.0): every real start through playAt is
+        // recorded — fresh starts, prev/next and auto-advance alike.
+        // The attach path (tryAttach) binds without calling playAt,
+        // so re-opening the player never double-records.
+        LxPlayHistory.record(this, track)
         state.sourceLabel = sourceLabelFor(track)
         state.errorText = null
         state.lyricLines = emptyList()

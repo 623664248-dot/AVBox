@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Multi-function menu entry of the music page top row: a 2x2 grid
+     of rounded squares. The fill matches ic_settings_theme (the
+     palette drawable it replaces in that slot), which the round
+     button renders untinted. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF1F1F1F"
+        android:pathData="M5,3 h4 a2,2 0 0 1 2,2 v4 a2,2 0 0 1 -2,2 H5 a2,2 0 0 1 -2,-2 V5 a2,2 0 0 1 2,-2 z M15,3 h4 a2,2 0 0 1 2,2 v4 a2,2 0 0 1 -2,2 h-4 a2,2 0 0 1 -2,-2 V5 a2,2 0 0 1 2,-2 z M5,13 h4 a2,2 0 0 1 2,2 v4 a2,2 0 0 1 -2,2 H5 a2,2 0 0 1 -2,-2 v-4 a2,2 0 0 1 2,-2 z M15,13 h4 a2,2 0 0 1 2,2 v4 a2,2 0 0 1 -2,2 h-4 a2,2 0 0 1 -2,-2 v-4 a2,2 0 0 1 2,-2 z" />
+</vector>

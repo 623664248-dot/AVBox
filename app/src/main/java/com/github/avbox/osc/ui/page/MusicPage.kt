@@ -110,6 +110,7 @@ import com.github.avbox.osc.music.NowPlayingState
 import com.github.avbox.osc.music.PyMusicBridge
 import com.github.avbox.osc.music.PyMusicSources
 import com.github.avbox.osc.ui.components.AVBoxAlertDialog
+import com.github.avbox.osc.ui.components.AVBoxBottomSheet
 import com.github.avbox.osc.ui.music.LxLoopMode
 import com.github.avbox.osc.ui.music.LxMusicPlayerActivity
 import com.github.avbox.osc.ui.music.MusicAppearance
@@ -144,6 +145,8 @@ fun MusicPage(
     val chartsLoading by vm.chartsLoading.collectAsStateWithLifecycle()
     val chartSongsLoading by vm.chartSongsLoading.collectAsStateWithLifecycle()
     val favorites by vm.favorites.collectAsStateWithLifecycle()
+    val listOverlay by vm.listOverlay.collectAsStateWithLifecycle()
+    val playHistory by vm.playHistory.collectAsStateWithLifecycle()
     val pyActive by vm.pyActive.collectAsStateWithLifecycle()
     val pyClasses by vm.pyClasses.collectAsStateWithLifecycle()
     val selectedPyClass by vm.selectedPyClass.collectAsStateWithLifecycle()
@@ -158,27 +161,21 @@ fun MusicPage(
     var query by rememberSaveable { mutableStateOf("") }
     var scriptDialogOpen by remember { mutableStateOf(false) }
     var appearanceOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
 
     // After a pick, the import runs in the ViewModel and its result
     // toasts arrive through the page-level messages flow below, so
     // the source dialog closes right away and the user lands back on
     // the music page instead of staring at the dialog while the new
     // source loads (v1.17.0). Cancelling the picker (null uri) keeps
-    // the dialog open.
+    // the dialog open. One launcher serves both source kinds since
+    // v1.18.0: the ViewModel's import dispatch decides JS vs py from
+    // the file name / content and routes to the matching import.
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri != null) {
-            vm.importScript(uri)
-            scriptDialogOpen = false
-        }
-    }
-
-    val pyImportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null) {
-            vm.importPyScript(uri)
+            vm.importSource(uri)
             scriptDialogOpen = false
         }
     }
@@ -263,7 +260,7 @@ fun MusicPage(
         Column(modifier = Modifier.fillMaxSize()) {
             Spacer(Modifier.height(12.dp))
             // Top row: the vinyl source button, the search field and the
-            // appearance entry. Both round buttons are 40dp with equal
+            // multi-function menu entry. Both round buttons are 40dp with equal
             // 8dp spacing, so the field between them stays centered. The
             // field lives here in both native and spider mode (it used to
             // sit inside the mode contents below); its query state, IME
@@ -294,10 +291,13 @@ fun MusicPage(
                     },
                     modifier = Modifier.weight(1f),
                 )
-                TopRoundButton(onClick = { appearanceOpen = true }) {
+                // Multi-function entry (v1.18.0): appearance, favourites
+                // and play history live behind this one button's menu;
+                // the palette no longer opens the sheet directly.
+                TopRoundButton(onClick = { menuOpen = true }) {
                     Icon(
-                        painter = painterResource(R.drawable.ic_settings_theme),
-                        contentDescription = stringResource(R.string.music_appearance),
+                        painter = painterResource(R.drawable.ic_music_more),
+                        contentDescription = stringResource(R.string.music_menu_more),
                         modifier = Modifier.size(20.dp),
                     )
                 }
@@ -380,12 +380,49 @@ fun MusicPage(
                 vm.closeChart()
             }
 
+            BackHandler(enabled = listOverlay != null) {
+                vm.closeOverlay()
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(bottom = if (miniBarVisible) 64.dp else 0.dp),
             ) {
-                if (noSource) {
+                if (listOverlay == MusicListOverlay.FAVORITES) {
+                    // Menu-opened favourites overlay: the only way to
+                    // reach the list in spider mode (native mode uses
+                    // the FAVORITES mode branch below instead).
+                    MusicOverlayList(
+                        title = stringResource(R.string.music_favorites_title),
+                        tracks = favorites,
+                        emptyText = stringResource(R.string.music_favorites_empty),
+                        onClose = { vm.closeOverlay() },
+                        onClear = null,
+                        onPlay = { index ->
+                            LxMusicPlayerActivity.start(
+                                context,
+                                MusicTrack.listToJson(favorites),
+                                index,
+                            )
+                        },
+                    )
+                } else if (listOverlay == MusicListOverlay.HISTORY) {
+                    MusicOverlayList(
+                        title = stringResource(R.string.music_menu_history),
+                        tracks = playHistory,
+                        emptyText = stringResource(R.string.music_history_empty),
+                        onClose = { vm.closeOverlay() },
+                        onClear = { vm.clearHistory() },
+                        onPlay = { index ->
+                            LxMusicPlayerActivity.start(
+                                context,
+                                MusicTrack.listToJson(playHistory),
+                                index,
+                            )
+                        },
+                    )
+                } else if (noSource) {
                     // No user source imported yet: the bridge never
                     // inits and every list call safely returns empty,
                     // so all the page needs is this hint.
@@ -662,14 +699,20 @@ fun MusicPage(
                     }
                     TextButton(
                         onClick = {
-                            // .js files report all kinds of mime types from
-                            // file managers; accept the usual ones and fall
-                            // back to */* so any picker can offer the file.
+                            // One entry for both kinds (v1.18.0): .js
+                            // sources and .py spiders report all kinds of
+                            // mime types from file managers, so accept
+                            // the union of both old lists and fall back
+                            // to */*; the ViewModel dispatch sorts out
+                            // which kind the picked file actually is.
                             importLauncher.launch(
                                 arrayOf(
                                     "text/javascript",
                                     "application/javascript",
                                     "application/x-javascript",
+                                    "text/x-python",
+                                    "text/plain",
+                                    "application/octet-stream",
                                     "text/*",
                                     "*/*",
                                 ),
@@ -677,24 +720,7 @@ fun MusicPage(
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(stringResource(R.string.music_source_import))
-                    }
-                    TextButton(
-                        onClick = {
-                            // .py spiders likewise come with inconsistent
-                            // mime types; accept python-ish types and */*.
-                            pyImportLauncher.launch(
-                                arrayOf(
-                                    "text/x-python",
-                                    "text/plain",
-                                    "application/octet-stream",
-                                    "*/*",
-                                ),
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(stringResource(R.string.music_py_import))
+                        Text(stringResource(R.string.music_import_entry))
                     }
                 }
             },
@@ -705,6 +731,49 @@ fun MusicPage(
                 }
             },
         )
+    }
+
+    if (menuOpen) {
+        // The top-right button's menu (v1.18.0): appearance moved in
+        // here from its old direct button; favourites and history open
+        // through the ViewModel (mode in native mode, overlay in
+        // spider mode for favourites; overlay in both for history).
+        AVBoxBottomSheet(
+            onDismissRequest = { menuOpen = false },
+            title = stringResource(R.string.music_menu_more),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 24.dp),
+            ) {
+                MusicMenuRow(
+                    iconRes = R.drawable.ic_settings_theme,
+                    label = stringResource(R.string.music_appearance),
+                    onClick = {
+                        menuOpen = false
+                        appearanceOpen = true
+                    },
+                )
+                MusicMenuRow(
+                    iconRes = R.drawable.ic_favorite,
+                    label = stringResource(R.string.music_favorites_title),
+                    onClick = {
+                        menuOpen = false
+                        vm.openFavorites()
+                    },
+                )
+                MusicMenuRow(
+                    iconRes = R.drawable.ic_tab_history,
+                    label = stringResource(R.string.music_menu_history),
+                    onClick = {
+                        menuOpen = false
+                        vm.openHistory()
+                    },
+                )
+            }
+        }
     }
 
     if (appearanceOpen) {
@@ -761,6 +830,98 @@ fun MusicPage(
                 }
             },
         )
+    }
+}
+
+/** One icon + label action row of the top-right multi-function menu. */
+@Composable
+private fun MusicMenuRow(
+    iconRes: Int,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            modifier = Modifier.size(24.dp),
+        )
+        Spacer(Modifier.width(16.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+        )
+    }
+}
+
+/**
+ * A menu-opened list rendered instead of the mode content: a header
+ * row (title, optional 清空 action, close button) over the shared
+ * track rows. Tapping a row plays it with the whole list as the
+ * queue, exactly like the native favourites list.
+ */
+@Composable
+private fun MusicOverlayList(
+    title: String,
+    tracks: List<MusicTrack>,
+    emptyText: String,
+    onClose: () -> Unit,
+    onClear: (() -> Unit)?,
+    onPlay: (Int) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            if (onClear != null) {
+                TextButton(onClick = onClear) {
+                    Text(stringResource(R.string.music_history_clear))
+                }
+            }
+            IconButton(onClick = onClose) {
+                Icon(
+                    painter = painterResource(R.drawable.player_ic_close),
+                    contentDescription = stringResource(R.string.common_off),
+                )
+            }
+        }
+        if (tracks.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Text(
+                    text = emptyText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
+                itemsIndexed(
+                    tracks,
+                    key = { index, _ -> index },
+                ) { index, track ->
+                    MusicTrackRow(
+                        track = track,
+                        onClick = { onPlay(index) },
+                    )
+                }
+            }
+        }
     }
 }
 
