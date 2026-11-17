@@ -1616,3 +1616,22 @@ Torres 试 v1.17.0 录屏后的三点反馈，全部在 MusicPage.kt。
   锚点几何决定，与目标偏移无关，复核后不变。
 - 其余全部未动：球的位置与样式、展开/收起语义、三项动作、
   全屏选集、播放记录、统一导入均与 v1.18.4 一致。
+
+## v1.18.6 — 背景图改系统相册选择器（含 v1.18.5 扇形放大）
+
+- Torres 的录屏：外观设置里点「选择背景图片」打开的是系统
+  文件选择器（DocumentsUI），落在空文件夹里、要逐层翻存储；
+  他要求直接打开相册。
+- 改动（ui/music/MusicAppearance.kt 的 MusicAppearanceSheet）：
+  启动器由 ActivityResultContracts.OpenDocument 换成
+  PickVisualMedia，启动参数为
+  PickVisualMediaRequest(ImageOnly)，点「选择背景图片」直接
+  打开系统照片选择器（相册网格）。
+- 存储方式不变：照片选择器的 Uri 授权是短期的，选中结果仍
+  由既有的 copyBackgroundImage 复制进内部存储
+  filesDir/music_bg/ 并以绝对路径存 KV，重启后照常显示；
+  MusicBackground 加载时对 content:// 开头的旧值兼容
+  （直接以 Uri 交给 Coil），其余按本地文件路径加载。
+- 恢复默认、模糊/不透明度滑杆、EQ 区均未动；音源导入等其余
+  文件选择器（仍需文件选择器）未动。
+- 本版同时包含 v1.18.5 的扇形展开半径放大。

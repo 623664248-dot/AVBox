@@ -189,7 +189,13 @@ fun MusicBackground(
     val customPath = MusicAppearance.bgPath
     val blur = MusicAppearance.blurDp
     val scrim = MusicAppearance.scrimPercent
-    val model: Any? = if (customPath.isNotBlank()) File(customPath) else fallbackModel
+    // Stored values are internal file paths (picked images are copied);
+    // a content:// value from an older flow is handed to Coil as a Uri.
+    val model: Any? = when {
+        customPath.isBlank() -> fallbackModel
+        customPath.startsWith("content://") -> Uri.parse(customPath)
+        else -> File(customPath)
+    }
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -242,8 +248,11 @@ fun MusicAppearanceSheet(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val pickFailedMsg = stringResource(R.string.music_appearance_pick_failed)
+    // System photo picker (album grid directly) instead of the files
+    // picker; the picked Uri's grant is short-lived, so the result is
+    // copied into internal storage by copyBackgroundImage as before.
     val pickLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
+        ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -275,7 +284,13 @@ fun MusicAppearanceSheet(
             )
             Row(modifier = Modifier.fillMaxWidth()) {
                 TextButton(
-                    onClick = { pickLauncher.launch(arrayOf("image/*")) },
+                    onClick = {
+                        pickLauncher.launch(
+                            ActivityResultContracts.PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly,
+                            ),
+                        )
+                    },
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(stringResource(R.string.music_appearance_pick_bg))
