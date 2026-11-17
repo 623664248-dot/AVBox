@@ -6,6 +6,7 @@ import android.content.Context
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -286,7 +287,7 @@ fun MusicAppearanceSheet(
                 TextButton(
                     onClick = {
                         pickLauncher.launch(
-                            ActivityResultContracts.PickVisualMediaRequest(
+                            PickVisualMediaRequest(
                                 ActivityResultContracts.PickVisualMedia.ImageOnly,
                             ),
                         )
