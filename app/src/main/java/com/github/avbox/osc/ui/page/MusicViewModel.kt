@@ -447,6 +447,10 @@ class MusicViewModel : ViewModel() {
                 val def = withContext(Dispatchers.IO) {
                     PyMusicSources.importScript(context, uri)
                 }
+                // An import always mints a fresh slug, so this is a
+                // defensive no-op today; it keeps the bridge cache
+                // correct if imports ever replace a file in place.
+                PyMusicBridge.clearCacheFor(def.id)
                 reloadPyDefs()
                 refreshScriptOptions(selectedId = selectedScriptId())
                 _messages.tryEmit(str(R.string.music_source_imported, def.name))
@@ -465,6 +469,7 @@ class MusicViewModel : ViewModel() {
         val wasInUse = _pyActive.value && currentPyDef?.id == def.id
         viewModelScope.launch {
             withContext(Dispatchers.IO) { PyMusicSources.delete(context, def.id) }
+            PyMusicBridge.clearCacheFor(def.id)
             reloadPyDefs()
             _messages.tryEmit(str(R.string.music_source_deleted))
             if (wasInUse) {

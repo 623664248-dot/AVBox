@@ -75,10 +75,34 @@ object PyMusicBridge {
     private suspend fun <T> serialized(block: suspend () -> T): T =
         callMutex.withLock { block() }
 
+    // Process-lifetime result cache (v1.17.0): homeContent per source
+    // slug, and categoryContent page 1 per (slug, classId). Spider
+    // activation re-ran these calls on every entry and every source
+    // switch, and a music spider's homeContent can take seconds (the
+    // Python cold start aside, several spiders fetch and parse whole
+    // listing pages), which made re-entering the music tab feel slow.
+    // Search, detail, playerContent and pages > 1 are never cached.
+    // Every read and write happens inside [serialized] — the bridge
+    // mutex — so plain HashMaps are safe here; [clearCacheFor] also
+    // goes through the mutex.
+    private val homeCache = HashMap<String, HomeResult>()
+    private val categoryPage1Cache = HashMap<Pair<String, String>, ListResult>()
+
+    /** Drops one source's cached home / page-1 results (file replaced or deleted). */
+    suspend fun clearCacheFor(slug: String) {
+        serialized {
+            homeCache.remove(slug)
+            categoryPage1Cache.keys.removeAll { it.first == slug }
+        }
+    }
+
     // ------------------------------------------------------------- queries
 
     suspend fun home(context: Context, def: PyMusicSources.PyDef): HomeResult =
-        serialized { homeLocked(context, def) }
+        serialized {
+            homeCache[def.id]
+                ?: homeLocked(context, def).also { homeCache[def.id] = it }
+        }
 
     private suspend fun homeLocked(context: Context, def: PyMusicSources.PyDef): HomeResult =
         withContext(Dispatchers.IO) {
@@ -105,7 +129,16 @@ object PyMusicBridge {
         def: PyMusicSources.PyDef,
         typeId: String,
         page: Int,
-    ): ListResult = serialized { categoryLocked(context, def, typeId, page) }
+    ): ListResult = serialized {
+        if (page == 1) {
+            val key = def.id to typeId
+            categoryPage1Cache[key]
+                ?: categoryLocked(context, def, typeId, page)
+                    .also { categoryPage1Cache[key] = it }
+        } else {
+            categoryLocked(context, def, typeId, page)
+        }
+    }
 
     private suspend fun categoryLocked(
         context: Context,

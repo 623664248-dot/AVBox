@@ -1234,3 +1234,70 @@ SessionToken / MediaController 参与音乐后台播放。
    封面（可能晚一两秒出现），不再是 App 图标。
 2. 桌面灵动岛胶囊/锁屏媒体卡同样显示封面。
 3. 切歌后封面跟着换成新歌的封面。
+
+## v1.17.0 — 唱片按钮换动态图 + 导入后回主界面 + 加载提速
+
+Torres 录屏与反馈（2026-11-17）三点：左上角唱片要换成他给的
+动态图；添加脚本/py 文件后还停在音源弹窗，要手动关；文件加载
+慢——录屏里打开音乐页后，记住的 py 源（爱听音乐）冷启动期间，
+页面在 JS 模式的「暂无榜单」上停了约 13 秒。
+
+### 1. 唱片按钮 = 动态 GIF
+
+- 顶部左键 VinylSourceButton 在 API 28+ 改为显示 Torres 给的
+  霓虹唱片动图（256×256、6 帧）：AndroidView + ImageView，
+  ImageDecoder 解码得到 AnimatedImageDrawable 后 start()，
+  CENTER_CROP 并裁成圆形；视图离屏时在 onRelease 里 stop()。
+  解码失败只留空壳，不崩页。
+- GIF 的入库形式：本仓库的 GitHub 推送通道只接受 UTF-8 文本
+  文件，二进制 GIF 传不上去，所以 GIF 以 base64 文本资源
+  res/raw/vinyl_neon.b64 入库（无换行）。运行时首次用到时，
+  VinylGifDisc 把它 Base64 解码写入 cacheDir/vinyl_neon.gif
+  （文件缺失或长度与解码字节不一致时才写），再用
+  ImageDecoder.createSource(文件) 解码；任何失败都走原来的
+  解码失败路径，只留空壳。
+- API < 28 没有 ImageDecoder，保留原来的自绘旋转唱片
+  （VinylCanvasDisc，空闲 20 秒/圈、播放 6 秒/圈的逻辑不变）。
+  按钮尺寸、点击开音源弹窗、playing 参数签名都不变。
+
+### 2. 导入后关弹窗回主界面
+
+- MusicPage 的两个导入回调（JS importLauncher、py
+  pyImportLauncher）在调用 vm.importScript / vm.importPyScript
+  之后立即把 scriptDialogOpen 置 false：弹窗关闭，用户直接
+  回到音乐主界面。导入与激活仍在 ViewModel 里异步进行，
+  「已导入 / 加载失败 / 音源已就绪」提示走页面级已有的
+  messages 收集（LaunchedEffect(vm)），关弹窗不丢任何提示。
+  取消选择文件（uri 为 null）时弹窗保持打开。ViewModel 的
+  导入语义不变（自动试新源、失败回退旧源）。
+
+### 3. 加载提速与体感
+
+- 空状态门控：ChartsContent 新增 initializing 入参
+  （scriptBusy || pyLoading；scriptBusy 从 VM 创建起为 true，
+  initBridge / activatePy 全程持有，覆盖 py 冷启动窗口）。
+  榜单为空、且仍在初始化时，显示居中转圈 + 「音源脚本加载
+  中…」，不再先闪「暂无榜单」；图表歌曲的空状态同理。初始化
+  结束后若确实没有榜单（如酷我），仍显示「暂无榜单」。
+- PyMusicBridge 进程级内存缓存：homeContent 按源 slug 缓存，
+  categoryContent 只缓存第 1 页（键为 slug+分类 id）；搜索、
+  详情、playerContent 与第 2 页起不缓存。缓存读写都在桥的
+  串行 Mutex 内，普通 HashMap 即可。源被删除（及导入，防御性）
+  时经 MusicViewModel 调用 clearCacheFor(slug) 失效。
+- 超时值不变。
+
+### 已知说明
+
+- Python 运行时首次冷启动仍要几秒（进程内第一次加载爬虫的
+  固有成本）；缓存只让重复进音乐页、来回切源变秒开。
+- GIF 按钮动画需 API 28+；更老的系统继续用自绘旋转唱片。
+
+### 真机验证点
+
+1. 音乐页左上角是动态的霓虹唱片图，点它仍打开音源弹窗。
+2. 在弹窗里导入一个 JS 或 py 文件：选完文件弹窗自动关、回到
+   音乐主界面，导入结果的提示（已导入/已就绪/失败）照常出现。
+3. 杀掉 App 重开进音乐页：记住的 py 源加载期间显示转圈+
+   「音源脚本加载中…」，不再出现「暂无榜单」；加载完直接是
+   该源的分类。退出音乐页再进来、或切走再切回该 py 源，
+   分类与第一页列表应秒出（走缓存）。

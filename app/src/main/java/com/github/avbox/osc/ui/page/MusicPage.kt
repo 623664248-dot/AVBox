@@ -6,6 +6,11 @@
 package com.github.avbox.osc.ui.page
 
 import android.content.Context
+import android.graphics.ImageDecoder
+import android.graphics.drawable.AnimatedImageDrawable
+import android.os.Build
+import android.util.Base64
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -89,6 +94,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.Player
@@ -108,6 +114,7 @@ import com.github.avbox.osc.ui.music.MusicAppearance
 import com.github.avbox.osc.ui.music.MusicAppearanceSheet
 import com.github.avbox.osc.ui.music.MusicBackground
 import com.github.avbox.osc.util.KV
+import java.io.File
 import kotlin.random.Random
 import kotlinx.coroutines.launch
 
@@ -150,16 +157,28 @@ fun MusicPage(
     var scriptDialogOpen by remember { mutableStateOf(false) }
     var appearanceOpen by remember { mutableStateOf(false) }
 
+    // After a pick, the import runs in the ViewModel and its result
+    // toasts arrive through the page-level messages flow below, so
+    // the source dialog closes right away and the user lands back on
+    // the music page instead of staring at the dialog while the new
+    // source loads (v1.17.0). Cancelling the picker (null uri) keeps
+    // the dialog open.
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        if (uri != null) vm.importScript(uri)
+        if (uri != null) {
+            vm.importScript(uri)
+            scriptDialogOpen = false
+        }
     }
 
     val pyImportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        if (uri != null) vm.importPyScript(uri)
+        if (uri != null) {
+            vm.importPyScript(uri)
+            scriptDialogOpen = false
+        }
     }
 
     // Spider-mode play requests (single-episode vods and picked episodes)
@@ -394,6 +413,7 @@ fun MusicPage(
                         selectedChart = selectedChart,
                         chartsLoading = chartsLoading,
                         chartSongsLoading = chartSongsLoading,
+                        initializing = scriptBusy || pyLoading,
                         onOpenChart = { vm.openChart(it) },
                         onCloseChart = { vm.closeChart() },
                         onPlayChartSong = { index ->
@@ -981,22 +1001,104 @@ private fun TopRoundButton(
 }
 
 /**
- * The source-script entry of the top row: a self-drawn vinyl record
- * (black disc, groove rings, a light arc, colored center label with an
- * off-center dot, spindle hole) inside the shared round-button shell.
- * The disc always turns: at one turn per 20 seconds while idle, and
- * one turn per 6 seconds while the shared now-playing record reports
- * playback. The angle is accumulated frame by frame and the current
- * rate eases toward its target over roughly 0.6 seconds, so toggling
- * play state never makes the disc jump or snap to a new speed.
- * Tapping opens the same source dialog the removed floating button
- * used to open.
+ * The source-script entry of the top row, inside the shared
+ * round-button shell. On API 28+ it shows Torres's neon vinyl GIF
+ * (shipped as the base64 text resource res/raw/vinyl_neon.b64 and
+ * materialised to a cache file at runtime — see [VinylGifDisc]) as
+ * an animated drawable; older systems keep the self-drawn rotating
+ * disc ([VinylCanvasDisc]). Tapping
+ * opens the same source dialog the removed floating button used to
+ * open. [playing] only drives the fallback disc's speed now.
  */
 @Composable
 private fun VinylSourceButton(
     playing: Boolean,
     onClick: () -> Unit,
 ) {
+    val description = stringResource(R.string.music_source_switch)
+    TopRoundButton(
+        onClick = onClick,
+        modifier = Modifier.semantics { contentDescription = description },
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            VinylGifDisc()
+        } else {
+            VinylCanvasDisc(playing = playing)
+        }
+    }
+}
+
+/**
+ * The neon vinyl GIF as a circular, animated disc. The GIF ships as
+ * a base64 text resource (res/raw/vinyl_neon.b64) because this
+ * repo's push channel accepts text files only; on first use
+ * [materialiseVinylGif] decodes it to a real file in the cache dir
+ * and ImageDecoder decodes from there, so the system hands back an
+ * AnimatedImageDrawable, which is started on creation and stopped
+ * when the view leaves composition. Any failure (resource, base64
+ * or decode) leaves the round shell empty rather than crashing
+ * the page.
+ */
+@Composable
+private fun VinylGifDisc() {
+    AndroidView(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape),
+        factory = { ctx ->
+            ImageView(ctx).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                try {
+                    val source = ImageDecoder.createSource(
+                        materialiseVinylGif(ctx),
+                    )
+                    val decoded = ImageDecoder.decodeDrawable(source)
+                    setImageDrawable(decoded)
+                    if (decoded is AnimatedImageDrawable) decoded.start()
+                } catch (t: Throwable) {
+                    // The shell still reads as the source entry; a
+                    // missing animation must not break the page.
+                }
+            }
+        },
+        onRelease = { view ->
+            (view.drawable as? AnimatedImageDrawable)?.stop()
+        },
+    )
+}
+
+/**
+ * Decodes the base64 vinyl GIF resource (R.raw.vinyl_neon, the
+ * res/raw/vinyl_neon.b64 text file) into cacheDir/vinyl_neon.gif
+ * and returns that file. The file is (re)written only when it is
+ * missing or its length differs from the decoded bytes, so repeat
+ * calls cost just the resource read plus a stat.
+ */
+private fun materialiseVinylGif(context: Context): File {
+    val text = context.resources
+        .openRawResource(R.raw.vinyl_neon)
+        .bufferedReader()
+        .use { it.readText() }
+    val bytes = Base64.decode(text, Base64.DEFAULT)
+    val file = File(context.cacheDir, "vinyl_neon.gif")
+    if (!file.exists() || file.length() != bytes.size.toLong()) {
+        file.writeBytes(bytes)
+    }
+    return file
+}
+
+/**
+ * Fallback for API < 28 (no ImageDecoder): a self-drawn vinyl record
+ * (black disc, groove rings, a light arc, colored center label with
+ * an off-center dot, spindle hole). The disc always turns: at one
+ * turn per 20 seconds while idle, and one turn per 6 seconds while
+ * the shared now-playing record reports playback. The angle is
+ * accumulated frame by frame and the current rate eases toward its
+ * target over roughly 0.6 seconds, so toggling play state never
+ * makes the disc jump or snap to a new speed.
+ */
+@Composable
+private fun VinylCanvasDisc(playing: Boolean) {
     var rotation by remember { mutableStateOf(0f) }
     val playingNow = rememberUpdatedState(playing)
     LaunchedEffect(Unit) {
@@ -1024,47 +1126,41 @@ private fun VinylSourceButton(
     }
     val labelColor = MaterialTheme.colorScheme.primary
     val holeColor = MaterialTheme.colorScheme.surface
-    val description = stringResource(R.string.music_source_switch)
-    TopRoundButton(
-        onClick = onClick,
-        modifier = Modifier.semantics { contentDescription = description },
+    Canvas(
+        modifier = Modifier
+            .size(30.dp)
+            .graphicsLayer { rotationZ = rotation },
     ) {
-        Canvas(
-            modifier = Modifier
-                .size(30.dp)
-                .graphicsLayer { rotationZ = rotation },
-        ) {
-            val c = center
-            val r = size.minDimension / 2f
-            // Black disc.
-            drawCircle(color = Color(0xFF17181C), radius = r)
-            // Groove rings.
-            for (fraction in listOf(0.84f, 0.70f, 0.57f)) {
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.10f),
-                    radius = r * fraction,
-                    style = Stroke(width = 1.dp.toPx()),
-                )
-            }
-            // A light arc so the spin stays visible.
-            drawArc(
-                color = Color.White.copy(alpha = 0.35f),
-                startAngle = -40f,
-                sweepAngle = 70f,
-                useCenter = false,
-                style = Stroke(width = 2.dp.toPx()),
-                topLeft = Offset(c.x - r * 0.84f, c.y - r * 0.84f),
-                size = Size(r * 1.68f, r * 1.68f),
-            )
-            // Center label, an off-center dot and the spindle hole.
-            drawCircle(color = labelColor, radius = r * 0.38f)
+        val c = center
+        val r = size.minDimension / 2f
+        // Black disc.
+        drawCircle(color = Color(0xFF17181C), radius = r)
+        // Groove rings.
+        for (fraction in listOf(0.84f, 0.70f, 0.57f)) {
             drawCircle(
-                color = Color.White.copy(alpha = 0.85f),
-                radius = r * 0.07f,
-                center = Offset(c.x + r * 0.20f, c.y - r * 0.12f),
+                color = Color.White.copy(alpha = 0.10f),
+                radius = r * fraction,
+                style = Stroke(width = 1.dp.toPx()),
             )
-            drawCircle(color = holeColor, radius = r * 0.09f)
         }
+        // A light arc so the spin stays visible.
+        drawArc(
+            color = Color.White.copy(alpha = 0.35f),
+            startAngle = -40f,
+            sweepAngle = 70f,
+            useCenter = false,
+            style = Stroke(width = 2.dp.toPx()),
+            topLeft = Offset(c.x - r * 0.84f, c.y - r * 0.84f),
+            size = Size(r * 1.68f, r * 1.68f),
+        )
+        // Center label, an off-center dot and the spindle hole.
+        drawCircle(color = labelColor, radius = r * 0.38f)
+        drawCircle(
+            color = Color.White.copy(alpha = 0.85f),
+            radius = r * 0.07f,
+            center = Offset(c.x + r * 0.20f, c.y - r * 0.12f),
+        )
+        drawCircle(color = holeColor, radius = r * 0.09f)
     }
 }
 
@@ -1239,6 +1335,27 @@ private fun FavoritesContent(
     }
 }
 
+/**
+ * Shown in place of an empty-list state while the selected source is
+ * still initialising or activating: a spinner plus the script-loading
+ * text, so a cold start never reads as "no content" (v1.17.0).
+ */
+@Composable
+private fun MusicInitializingPlaceholder(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        CircularProgressIndicator()
+        Text(
+            text = stringResource(R.string.music_script_loading),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 12.dp),
+        )
+    }
+}
+
 @Composable
 private fun ChartsContent(
     charts: List<MusicChart>,
@@ -1246,6 +1363,7 @@ private fun ChartsContent(
     selectedChart: MusicChart?,
     chartsLoading: Boolean,
     chartSongsLoading: Boolean,
+    initializing: Boolean,
     onOpenChart: (MusicChart) -> Unit,
     onCloseChart: () -> Unit,
     onPlayChartSong: (Int) -> Unit,
@@ -1279,12 +1397,18 @@ private fun ChartsContent(
                         }
 
                         chartSongs.isEmpty() -> {
-                            Text(
-                                text = stringResource(R.string.music_empty_result),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.align(Alignment.Center),
-                            )
+                            if (initializing) {
+                                MusicInitializingPlaceholder(
+                                    modifier = Modifier.align(Alignment.Center),
+                                )
+                            } else {
+                                Text(
+                                    text = stringResource(R.string.music_empty_result),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.align(Alignment.Center),
+                                )
+                            }
                         }
 
                         else -> {
@@ -1316,12 +1440,23 @@ private fun ChartsContent(
 
         charts.isEmpty() -> {
             Box(modifier = Modifier.fillMaxSize()) {
-                Text(
-                    text = stringResource(R.string.music_charts_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.Center),
-                )
+                if (initializing) {
+                    // A source is still initialising/activating (the
+                    // remembered py source cold-starting, a JS script
+                    // init): the catalog is not known to be empty yet,
+                    // so show the loading state instead of 暂无榜单
+                    // (v1.17.0).
+                    MusicInitializingPlaceholder(
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.music_charts_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
             }
         }
 
