@@ -862,28 +862,33 @@ private fun MusicMultiFab(
             // edge and 22dp below the box's top; reaching a centre
             // at (ball + dx, ball + dy) therefore takes an offset
             // of (dx - 2dp, dy + 14dp) from the ball centre at
-            // (24dp from the edge, 36dp from the top).
+            // (24dp from the edge, 36dp from the top). The arc
+            // radius is ~95dp (v1.18.5 widened it from ~64dp,
+            // whose items and label chips crowded into each
+            // other); 播放记录 sits 10dp past the radius so its
+            // label chip clears the bottom of the 我的收藏
+            // circle.
             val fanItems = listOf(
                 FanItem(
                     iconRes = R.drawable.ic_settings_theme,
                     labelRes = R.string.music_appearance,
                     action = onAppearance,
-                    dx = -64,
+                    dx = -95,
                     dy = 0,
                 ),
                 FanItem(
                     iconRes = R.drawable.ic_favorite,
                     labelRes = R.string.music_favorites_title,
                     action = onFavorites,
-                    dx = -50,
-                    dy = 50,
+                    dx = -67,
+                    dy = 67,
                 ),
                 FanItem(
                     iconRes = R.drawable.ic_tab_history,
                     labelRes = R.string.music_menu_history,
                     action = onHistory,
                     dx = 0,
-                    dy = 66,
+                    dy = 105,
                 ),
             )
             fanItems.forEach { item ->
