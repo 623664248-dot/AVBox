@@ -17,6 +17,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -79,6 +80,7 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -269,14 +271,22 @@ fun MusicPage(
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Spacer(Modifier.height(12.dp))
-            // Top row: the vinyl source button and the search field.
-            // The field lives here in both native and spider mode (it
-            // used to sit inside the mode contents below); its query
-            // state, IME search action and pill styling are unchanged,
-            // only the search target differs (native search switches
-            // to the search mode first so the results stay visible).
-            // Appearance / favourites / history left this row in
-            // v1.18.2 for the floating multi-function ball below.
+            // Top row: the vinyl source button, the search field and
+            // the multi-function ball's seat. The field lives here in
+            // both native and spider mode (it used to sit inside the
+            // mode contents below); its query state, IME search action
+            // and pill styling are unchanged, only the search target
+            // differs (native search switches to the search mode first
+            // so the results stay visible). Appearance / favourites /
+            // history sat in this row as a button in v1.18.0, left for
+            // the multi-function ball in v1.18.2, and since v1.18.4
+            // the ball is back at this row's right end — drawn by the
+            // page-root overlay (MusicMultiFab below) so its fan and
+            // scrim can cover the page while the ball stays on top;
+            // the row itself only reserves the ball's spot with the
+            // 48dp spacer after the search field, which also makes
+            // the row 48dp tall, exactly what the overlay's anchor
+            // math assumes.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -301,6 +311,11 @@ fun MusicPage(
                     },
                     modifier = Modifier.weight(1f),
                 )
+                // The multi-function ball's seat: a 48dp spacer at
+                // the row's right end (8dp spacing like the other
+                // gaps). MusicMultiFab draws the ball itself over
+                // exactly this spot.
+                Spacer(Modifier.size(48.dp))
             }
 
             // Second row: the platform chips act as the resource-site
@@ -684,12 +699,14 @@ fun MusicPage(
             }
         }
 
-        // Multi-function ball (v1.18.2, fixed in place in
-        // v1.18.3): the appearance / favourites / history entry,
-        // moved off the top row. It is the last child of this box,
-        // so it floats above the content and the mini bar (sheets
-        // and dialogs live in their own windows, still above it),
-        // in both native and spider mode.
+        // Multi-function ball overlay (v1.18.2; fixed top-right
+        // fan since v1.18.4): the appearance / favourites / history
+        // entry. It is the last child of this box, so its scrim,
+        // fan items and ball render above the content and the mini
+        // bar (sheets and dialogs live in their own windows, still
+        // above it), in both native and spider mode; the ball
+        // itself lands on the 48dp spacer reserved for it in the
+        // top row.
         MusicMultiFab(
             onAppearance = { appearanceOpen = true },
             onFavorites = { vm.openFavorites() },
@@ -776,25 +793,39 @@ fun MusicPage(
 }
 
 /**
- * The music page's multi-function entry since v1.18.2: a ball in
- * the style of the reference app Torres screenshotted, replacing
- * the v1.18.0 top-right button + bottom-sheet menu. The three
- * actions are the v1.18.0 ones, unchanged — appearance, favourites,
- * play history — only the entry point moved.
+ * The music page's multi-function entry: a 48dp ball in the style
+ * of the reference app Torres screenshotted, carrying the v1.18.0
+ * actions — appearance, favourites, play history. Only the entry
+ * point and its expansion changed across versions: v1.18.0 top-row
+ * button + bottom-sheet menu, v1.18.2 a draggable ball, v1.18.3
+ * the ball fixed at the bottom-right, and since v1.18.4 the ball
+ * sits back at the top row's right end (Torres: 「固定在右上角」)
+ * and expands into a fan (「点一下扇形打开，再点一下关闭」).
  *
- * v1.18.2 let the ball be dragged anywhere, its resting position
- * persisted in KV; Torres asked for it fixed instead, so since
- * v1.18.3 it is anchored to the bottom-right of the content area
- * (16dp end margin, raised 76dp above the bottom — clear of the
- * mini player bar's strip, 56dp bar plus its 4dp bottom padding
- * with a small gap — so it never covers the bar when it appears)
- * and always expands upward. Collapsed it is a 48dp dark
- * translucent ball (the v1.9.1 source FAB's black 55% + shadow
- * styling) that only intercepts touches on itself. A tap expands
- * three 44dp action buttons upward over a transparent,
- * ripple-free scrim; tapping the scrim, the ball or an item
- * collapses the stack, and an item tap invokes its action after
- * collapsing.
+ * The ball is drawn here, in the page-root overlay, not in the
+ * top row itself — the row only reserves a 48dp spacer in the
+ * ball's spot. That gives the whole widget one composition order:
+ * transparent scrim first, fan items above it, the ball last
+ * (topmost). While the fan is open the scrim therefore catches a
+ * collapse tap anywhere on the page yet never covers the ball,
+ * which stays tappable to close. Anchor math, in this box's
+ * coordinates (the box is the page's padded content area, and the
+ * overlay shares that padding): the top row starts 12dp below
+ * the box's top (the Column's spacer), is 48dp tall because of
+ * the reserved spacer, and spans the box's full width, so the
+ * ball's centre sits 24dp in from the right edge and 36dp down
+ * from the top. A TopEnd ball with a 12dp top padding in this
+ * box lands exactly on the spacer.
+ *
+ * The fan items are children of this full-size box, never of a
+ * ball-sized anchor: a fixed-size parent caps its children's
+ * measure constraints at its own size, which is what squeezed
+ * v1.18.3's label pills into circles with the label text wrapped
+ * inside them and the icons nowhere to be seen. Each item is
+ * placed by TopEnd alignment plus an offset derived from its
+ * circle-centre target (see the fan table in the body). Tapping
+ * the scrim or the ball collapses the fan; tapping an item
+ * collapses first, then invokes its action.
  */
 @Composable
 private fun MusicMultiFab(
@@ -805,96 +836,131 @@ private fun MusicMultiFab(
     var expanded by remember { mutableStateOf(false) }
     val moreDescription = stringResource(R.string.music_menu_more)
 
-    if (expanded) {
-        // Transparent scrim: catches the collapse tap anywhere on
-        // the page without dimming it and without a ripple.
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) { expanded = false },
-        )
-    }
-
-    // Fixed anchor: a full-size wrapper (touch-transparent except
-    // on its children) pins the 48dp anchor box to the bottom-right
-    // corner. The item rows are wider than the anchor and extend
-    // past it towards the page centre (Compose does not clip
-    // children to the parent's bounds), so the labels stay on
-    // screen.
     Box(modifier = Modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 76.dp)
-                .size(48.dp),
-        ) {
-            if (expanded) {
-                val items = listOf(
-                    Triple(R.drawable.ic_settings_theme, R.string.music_appearance, onAppearance),
-                    Triple(R.drawable.ic_favorite, R.string.music_favorites_title, onFavorites),
-                    Triple(R.drawable.ic_tab_history, R.string.music_menu_history, onHistory),
-                )
-                items.forEachIndexed { index, item ->
-                    val (iconRes, labelRes, action) = item
-                    // Item 0 sits nearest the ball; the stack grows
-                    // upward away from it in 56dp steps (44dp item
-                    // + 12dp gap). The ball rests against the right
-                    // edge, so the rows align to the anchor's end
-                    // and their labels sit on the ball's left.
-                    MusicMultiFabItem(
-                        iconRes = iconRes,
-                        label = stringResource(labelRes),
-                        labelsFirst = true,
-                        onClick = {
-                            expanded = false
-                            action()
-                        },
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .offset(y = (-(index + 1) * 56).dp),
-                    )
-                }
-            }
-            Surface(
+        if (expanded) {
+            // Transparent scrim: catches the collapse tap anywhere
+            // on the page without dimming it and without a ripple.
+            // Drawn first, so it stays under the fan items and
+            // under the ball.
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .semantics {
-                        contentDescription = moreDescription
-                    }
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                    ) { expanded = !expanded },
-                shape = CircleShape,
-                color = Color.Black.copy(alpha = 0.55f),
-                shadowElevation = 6.dp,
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_music_more),
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp),
-                    )
+                    ) { expanded = false },
+            )
+
+            // The fan: three items arc down-left from the ball —
+            // 外观 directly left of it, 我的收藏 diagonally
+            // down-left, 播放记录 directly below (the v1.18.0
+            // menu order along the arc). dx/dy are item-circle
+            // centres relative to the ball's centre. Under TopEnd
+            // alignment an item row's right edge sits on this
+            // box's right edge with the 44dp circle last in the
+            // row, so the circle's centre starts 22dp in from the
+            // edge and 22dp below the box's top; reaching a centre
+            // at (ball + dx, ball + dy) therefore takes an offset
+            // of (dx - 2dp, dy + 14dp) from the ball centre at
+            // (24dp from the edge, 36dp from the top).
+            val fanItems = listOf(
+                FanItem(
+                    iconRes = R.drawable.ic_settings_theme,
+                    labelRes = R.string.music_appearance,
+                    action = onAppearance,
+                    dx = -64,
+                    dy = 0,
+                ),
+                FanItem(
+                    iconRes = R.drawable.ic_favorite,
+                    labelRes = R.string.music_favorites_title,
+                    action = onFavorites,
+                    dx = -50,
+                    dy = 50,
+                ),
+                FanItem(
+                    iconRes = R.drawable.ic_tab_history,
+                    labelRes = R.string.music_menu_history,
+                    action = onHistory,
+                    dx = 0,
+                    dy = 66,
+                ),
+            )
+            fanItems.forEach { item ->
+                MusicMultiFabItem(
+                    iconRes = item.iconRes,
+                    label = stringResource(item.labelRes),
+                    onClick = {
+                        expanded = false
+                        item.action()
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = (item.dx - 2).dp, y = (item.dy + 14).dp),
+                )
+            }
+        }
+
+        // The ball: last child of this box, hence drawn above the
+        // scrim, so a second tap on it closes the fan. TopEnd
+        // alignment plus the 12dp top padding put it exactly over
+        // the 48dp spacer the top row reserves for it.
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 12.dp)
+                .size(48.dp)
+                .semantics {
+                    contentDescription = moreDescription
                 }
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { expanded = !expanded },
+            shape = CircleShape,
+            color = Color.Black.copy(alpha = 0.55f),
+            shadowElevation = 6.dp,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_music_more),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp),
+                )
             }
         }
     }
 }
 
 /**
- * One expanded action of the multi-function ball: a 44dp dark
- * circle with a white icon and a small dark label chip beside it
- * (on the side away from the screen edge the ball rests against).
+ * One fan position of the multi-function ball: an action plus its
+ * circle centre's offset from the ball's centre, in dp (see the
+ * fan table in [MusicMultiFab]).
+ */
+private data class FanItem(
+    val iconRes: Int,
+    val labelRes: Int,
+    val action: () -> Unit,
+    val dx: Int,
+    val dy: Int,
+)
+
+/**
+ * One fanned-out action of the multi-function ball: a small label
+ * chip and a 44dp circle holding only the icon, side by side in a
+ * single clickable row — chip and circle together are the tap
+ * target, so tapping the label fires the action too. The circle
+ * is a fixed-size Box containing nothing but the centred icon,
+ * and the label is a sibling chip whose text is single-line with
+ * wrapping disabled; neither can absorb the other, which is the
+ * structural fix for v1.18.3's rendering bug (the label rendered
+ * wrapped inside a squeezed pill, the icon invisible).
  */
 @Composable
 private fun MusicMultiFabItem(
     iconRes: Int,
     label: String,
-    labelsFirst: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -906,44 +972,49 @@ private fun MusicMultiFabItem(
         ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (labelsFirst) {
-            MusicMultiFabLabel(label)
-            Spacer(Modifier.width(8.dp))
-        }
-        Surface(
-            shape = CircleShape,
-            color = Color.Black.copy(alpha = 0.55f),
-            shadowElevation = 6.dp,
-            modifier = Modifier.size(44.dp),
+        MusicMultiFabLabel(label)
+        Spacer(Modifier.width(8.dp))
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .shadow(6.dp, CircleShape)
+                .background(
+                    color = Color.Black.copy(alpha = 0.55f),
+                    shape = CircleShape,
+                ),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    painter = painterResource(iconRes),
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        }
-        if (!labelsFirst) {
-            Spacer(Modifier.width(8.dp))
-            MusicMultiFabLabel(label)
+            Icon(
+                painter = painterResource(iconRes),
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(22.dp),
+            )
         }
     }
 }
 
-/** The small dark pill carrying an expanded ball item's label. */
+/**
+ * The small dark label chip beside a fanned-out ball item: a
+ * rounded rectangle (not a pill) whose text never wraps, so the
+ * chip always reads as a label next to the item's icon circle.
+ */
 @Composable
 private fun MusicMultiFabLabel(text: String) {
-    Surface(
-        shape = RoundedCornerShape(percent = 50),
-        color = Color.Black.copy(alpha = 0.55f),
+    Box(
+        modifier = Modifier
+            .background(
+                color = Color.Black.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(6.dp),
+            )
+            .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.bodySmall,
             color = Color.White,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }
