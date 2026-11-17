@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
@@ -23,6 +24,11 @@ import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import coil3.Image
+import coil3.SingletonImageLoader
+import coil3.request.ImageRequest
+import coil3.target.Target
+import coil3.toBitmap
 import com.github.avbox.osc.R
 
 /**
@@ -106,6 +112,10 @@ class LxPlaybackService : Service() {
     private var exo: ExoPlayer? = null
     private var frameworkSession: MediaSession? = null
     private var foregroundStarted = false
+
+    /** Cover of the current track: the URL it was loaded from and the bitmap itself. */
+    private var artworkUrl: String? = null
+    private var artworkBitmap: Bitmap? = null
 
     /** The player this service owns; null only before onCreate / after onDestroy. */
     val player: ExoPlayer?
@@ -345,6 +355,21 @@ class LxPlaybackService : Service() {
             if (!artwork.isNullOrEmpty()) {
                 builder.putString(MediaMetadata.METADATA_KEY_ART_URI, artwork)
             }
+            // Cover bitmap for the media card / lock screen / 灵动岛:
+            // only when the loaded bitmap belongs to the current item.
+            val cover = artworkBitmap
+            if (!artwork.isNullOrEmpty() && cover != null && artworkUrl == artwork) {
+                builder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, cover)
+                builder.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, cover)
+            }
+            if (artwork.isNullOrEmpty()) {
+                artworkUrl = null
+                artworkBitmap = null
+            } else if (artworkUrl != artwork) {
+                artworkUrl = artwork
+                artworkBitmap = null
+                loadArtwork(artwork)
+            }
             val duration = player.duration
             if (duration > 0) {
                 builder.putLong(MediaMetadata.METADATA_KEY_DURATION, duration)
@@ -383,6 +408,36 @@ class LxPlaybackService : Service() {
             // Session sync is best effort; playback is unaffected.
         }
         updateNotification()
+    }
+
+    /**
+     * Loads the current track's cover asynchronously with Coil (the
+     * same pattern as the video PlaybackService), then re-syncs the
+     * session + notification so the media card, lock screen and
+     * notification show the cover instead of the app icon. The
+     * [artworkUrl] equality guard drops stale loads for a previous
+     * track, and the re-sync cannot retrigger a load because
+     * artworkUrl already equals the current item's artwork by then.
+     * Any failure is swallowed: artwork is cosmetic and must never
+     * affect playback or the text notification.
+     */
+    private fun loadArtwork(url: String) {
+        try {
+            val request = ImageRequest.Builder(this)
+                .data(url)
+                .size(512, 512)
+                .target(object : Target {
+                    override fun onSuccess(result: Image) {
+                        if (artworkUrl != url) return
+                        artworkBitmap = result.toBitmap()
+                        syncSessionAndNotification()
+                    }
+                })
+                .build()
+            SingletonImageLoader.get(this).enqueue(request)
+        } catch (t: Throwable) {
+            // artwork load is best effort
+        }
     }
 
     // ------------------------------------------------------- notification
@@ -428,10 +483,12 @@ class LxPlaybackService : Service() {
     }
 
     /**
-     * Text-only media notification (title/artist + prev/play-pause/next).
-     * No artwork bitmap: the service never downloads images, and a
-     * text notification that always appears beats an artwork one that
-     * depends on another network fetch.
+     * Media notification (title/artist + prev/play-pause/next) with
+     * the current track's cover as the large icon once [loadArtwork]
+     * has fetched it. Until the cover arrives, or if the fetch fails,
+     * the notification falls back to the app icon — the pre-v1.16.1
+     * behaviour — so the notification itself never depends on the
+     * artwork fetch succeeding.
      */
     private fun buildNotification(): Notification {
         val player = exo
@@ -476,6 +533,10 @@ class LxPlaybackService : Service() {
                 getString(R.string.music_next),
                 actionPendingIntent(ACTION_CMD_NEXT, REQ_NEXT),
             )
+        val cover = artworkBitmap
+        if (cover != null && artworkUrl == metadata?.artworkUri?.toString()) {
+            builder.setLargeIcon(cover)
+        }
         return builder.build()
     }
 

@@ -1213,3 +1213,24 @@ SessionToken / MediaController 参与音乐后台播放。
    可用，点条身回播放页且不重头播。
 4. 若仍不行：再发一次 music_crash.log——新版日志前缀是 svc2:，
    预期能看到 "svc2: shared bound" 与 "svc2: startForeground ok"。
+
+## v1.16.1 — 通知/媒体卡显示歌曲封面
+
+- Torres 反馈：通知栏媒体卡与灵动岛显示的是 AVBox 的 App 图标，
+  不是歌曲封面。原因是 v1.16.0 的 LxPlaybackService 只把封面 Uri
+  字符串写进框架 MediaSession 元数据，从不下载位图。
+- 本版只改 LxPlaybackService：照视频侧 PlaybackService 的
+  updateArtwork 模式，服务内用 Coil 异步加载当前歌曲封面
+  （512×512），以 artworkUrl 相等为防陈旧/防循环守卫；加载完成
+  后把位图写入框架 MediaSession 元数据的 ALBUM_ART 与
+  DISPLAY_ICON，并设为通知的 large icon，再走一遍同步刷新。
+- 封面未加载到、或加载失败时，回退到原来的 App 图标（即
+  v1.16.0 的行为）；封面加载全程 try/catch，失败不影响播放
+  与文字通知。
+
+### 真机验证点
+
+1. 点一首有封面的歌播放，按 Home：通知栏媒体卡左侧应显示歌曲
+   封面（可能晚一两秒出现），不再是 App 图标。
+2. 桌面灵动岛胶囊/锁屏媒体卡同样显示封面。
+3. 切歌后封面跟着换成新歌的封面。
