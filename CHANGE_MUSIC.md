@@ -1398,8 +1398,12 @@ Torres 试 v1.17.0 录屏后的三点反馈，全部在 MusicPage.kt。
   本项目的 material3（1.5.0-alpha29）里，thumb/track 插槽
   只存在于 state 型的 Slider 重载上，value 型的重载没有
   这两个参数，编译直接报「No parameter with name 'thumb'」。
-  ProgressRow 改用 SliderState：remember 一个 valueRange
+  ProgressRow 改用 SliderState：remember 一个 trackRange
   为 0f..1f 的 SliderState，未拖动时用 SideEffect 把它与
   播放进度同步（拖动时 onValueChange 驱动 seekFraction，
   同步目标即 state 自身的值，不打架）；track 因值域是
   0f..1f，st.value 即进度比例。VERSION 不变，仍为 v1.17.2。
+  二次构建（run 44035352217）仍失败：该版本 SliderState 的
+  区间参数名是 trackRange 而非 valueRange（已查 material3
+  1.5.0-alpha29 官方 sources jar 核实），构造调用改用
+  trackRange 后重推。

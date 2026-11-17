@@ -610,7 +610,7 @@ private fun ProgressRow(
     // progress; during a drag onValueChange drives seekFraction, so
     // the sync target equals the state's own value (no fight).
     val sliderState = remember {
-        SliderState(value = fraction, valueRange = 0f..1f)
+        SliderState(value = fraction, trackRange = 0f..1f)
     }
     SideEffect {
         sliderState.value = fraction
@@ -650,7 +650,7 @@ private fun ProgressRow(
                 )
             },
             track = { st ->
-                // valueRange is 0f..1f, so st.value IS the fraction.
+                // trackRange is 0f..1f, so st.value IS the fraction.
                 val trackFraction = st.value.coerceIn(0f, 1f)
                 BoxWithConstraints(
                     modifier = Modifier
