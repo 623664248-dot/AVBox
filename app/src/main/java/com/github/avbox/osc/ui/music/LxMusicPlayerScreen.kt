@@ -794,9 +794,14 @@ private fun VinylDisc(
 }
 
 /**
- * The tonearm overlay of the vinyl / turntable styles: a silver arm
- * on a pivot at the top right. Playing swings the needle end onto
- * the record; pausing swings it back to rest (animated).
+ * The tonearm overlay of the vinyl / turntable styles, modelled on
+ * the reference deck (v1.21.1): a ball pivot in the top-right
+ * corner, a SHORT white arm and a black headshell that lands on
+ * the record's right flank. The first cut's arm was 0.72 of the
+ * box and slashed diagonally to the centre, which Torres flagged
+ * as 还是不一样 against the reference. Playing swings the
+ * headshell onto the record; pausing swings it back to rest
+ * (animated).
  */
 @Composable
 private fun Tonearm(
@@ -804,38 +809,46 @@ private fun Tonearm(
     modifier: Modifier = Modifier,
 ) {
     val angle by animateFloatAsState(
-        targetValue = if (playing) 26f else 4f,
+        targetValue = if (playing) 30f else 10f,
         animationSpec = tween(durationMillis = 700),
         label = "tonearm",
     )
     Canvas(modifier = modifier) {
-        val pivot = Offset(size.width * 0.80f, size.height * 0.13f)
-        val armLength = size.height * 0.72f
+        val pivot = Offset(size.width * 0.86f, size.height * 0.10f)
+        val armLength = size.height * 0.37f
         drawCircle(
-            color = Color(0xFF3A3B40),
-            radius = 13.dp.toPx(),
+            color = Color(0xFFB9BBC2),
+            radius = 11.dp.toPx(),
             center = pivot,
         )
         drawCircle(
-            color = Color(0xFFB9BBC2),
-            radius = 7.dp.toPx(),
+            color = Color(0xFF3A3B40),
+            radius = 5.dp.toPx(),
             center = pivot,
         )
         rotate(degrees = angle, pivot = pivot) {
+            // Counterweight stub behind the pivot.
             drawLine(
-                color = Color(0xFFD7D8DC),
+                color = Color(0xFF3A3B40),
+                start = pivot,
+                end = Offset(pivot.x, pivot.y - size.height * 0.07f),
+                strokeWidth = 5.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+            drawLine(
+                color = Color(0xFFF2F2F4),
                 start = pivot,
                 end = Offset(pivot.x, pivot.y + armLength),
-                strokeWidth = 4.dp.toPx(),
+                strokeWidth = 3.5.dp.toPx(),
                 cap = StrokeCap.Round,
             )
             drawRoundRect(
                 color = Color(0xFF26272C),
                 topLeft = Offset(
-                    pivot.x - 5.dp.toPx(),
+                    pivot.x - 4.5.dp.toPx(),
                     pivot.y + armLength - 2.dp.toPx(),
                 ),
-                size = Size(10.dp.toPx(), 20.dp.toPx()),
+                size = Size(9.dp.toPx(), 17.dp.toPx()),
                 cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
             )
         }
@@ -884,7 +897,7 @@ private fun TurntableCoverArt(
         VinylDisc(
             track = track,
             playing = playing,
-            modifier = Modifier.fillMaxSize(0.88f),
+            modifier = Modifier.fillMaxSize(0.90f),
         )
         Tonearm(playing = playing, modifier = Modifier.fillMaxSize())
         // Left-edge details: the slim slider and the power dot.
