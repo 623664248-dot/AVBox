@@ -2,34 +2,34 @@ package com.github.avbox.osc.music
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
-import androidx.media3.session.MediaController
-import androidx.media3.session.SessionToken
-import com.google.common.util.concurrent.ListenableFuture
-import kotlin.coroutines.resume
-import kotlinx.coroutines.suspendCancellableCoroutine
+import androidx.media3.common.Player
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Process-wide warm connection to [LxPlaybackService] (v1.15.1).
+ * Process-wide binding to [LxPlaybackService] (v1.16.0).
  *
- * Why this exists: up to v1.13.3 the player Activity built its
- * MediaController cold when the page opened and gave it 3 s; on the
- * test device (Honor) the cold service start lost that race against
- * the QuickJS/Python initialisation running at the same time, the
- * session degraded to the in-Activity player and never retried — no
- * media notification, no background playback, no mini bar. The music
- * page now calls [ensureConnecting] as soon as it is composed, so by
- * the time the user taps a song the connection is usually already
- * established and the player Activity simply adopts it.
+ * This replaces the media3 MediaController / SessionToken connection
+ * used up to v1.15.4: on the test device (Honor / MagicOS) SessionToken
+ * construction threw IllegalArgumentException because the package
+ * manager query behind it returned nothing for this app's own
+ * MediaSessionService, so the service never started and every session
+ * silently degraded to in-Activity playback. A same-process bind via
+ * LocalBinder needs no token and no package-manager query at all —
+ * onServiceConnected hands over the service object directly.
  *
- * Ownership: the controller built here is shared and process-lived.
- * Adopters (the player Activity) add/remove their own listeners but
- * never release it; the reference is dropped only when the build
- * fails or the controller reports a disconnect, so the next
- * [ensureConnecting] starts a fresh build. The connection is built
- * with the application context, so no Activity is ever leaked.
+ * Ownership: the binding is made with the application context and is
+ * process-lived. Adopters (the player Activity, the music page's mini
+ * bar) use the service's player through [connectedService] /
+ * [connectedPlayer] and add/remove their own listeners, but never
+ * unbind or release anything; the references are dropped only when
+ * the system reports a disconnect, so the next [ensureConnecting]
+ * rebinds.
  */
 object MusicServiceConnection {
 
@@ -37,140 +37,134 @@ object MusicServiceConnection {
     private var appContext: Context? = null
 
     @Volatile
-    private var future: ListenableFuture<MediaController>? = null
+    private var service: LxPlaybackService? = null
 
     @Volatile
-    private var controller: MediaController? = null
+    private var binding = false
 
-    /** Drops the shared references when the service connection dies. */
-    private val disconnectListener = object : MediaController.Listener {
-        override fun onDisconnected(mc: MediaController) {
-            if (controller === mc) {
-                controller = null
-                future = null
+    @Volatile
+    private var pending: CompletableDeferred<LxPlaybackService?>? = null
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val svc = (binder as? LxPlaybackService.LocalBinder)?.getService()
+            val app = appContext
+            synchronized(this@MusicServiceConnection) {
+                service = svc
+                binding = false
+                pending?.complete(svc)
+                pending = null
+            }
+            if (app != null) {
+                if (svc != null) {
+                    MusicCrashLog.log(app, "svc2: shared bound")
+                } else {
+                    MusicCrashLog.log(app, "svc2: shared bind gave no service")
+                }
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            val app = appContext
+            synchronized(this@MusicServiceConnection) {
+                service = null
+                binding = false
+                pending?.complete(null)
+                pending = null
+            }
+            if (app != null) {
+                MusicCrashLog.log(app, "svc2: shared disconnected")
             }
         }
     }
 
     /**
-     * Starts building the shared controller if none exists and none
+     * Starts binding the shared service if it is not bound and no bind
      * is in flight; a no-op otherwise. Safe to call on every music
      * page composition and before every player connect attempt.
      */
     fun ensureConnecting(context: Context) {
         val app = context.applicationContext
         appContext = app
-        if (connectedController() != null) return
+        if (service != null) return
         synchronized(this) {
-            if (controller != null || future != null) return
+            if (service != null || binding) return
+            binding = true
+            pending = CompletableDeferred()
             val startedAt = SystemClock.elapsedRealtime()
-            MusicCrashLog.log(app, "svc: shared connect start")
+            MusicCrashLog.log(app, "svc2: shared bind start")
             try {
-                val token = SessionToken(
-                    app,
-                    ComponentName(app, LxPlaybackService::class.java),
+                val ok = app.bindService(
+                    Intent(app, LxPlaybackService::class.java),
+                    connection,
+                    Context.BIND_AUTO_CREATE,
                 )
-                val built = MediaController.Builder(app, token)
-                    .setListener(disconnectListener)
-                    .buildAsync()
-                future = built
-                built.addListener(
-                    {
-                        var failure: Throwable? = null
-                        val mc = try {
-                            built.get()
-                        } catch (t: Throwable) {
-                            failure = t
-                            null
-                        }
-                        if (mc != null) {
-                            controller = mc
-                            MusicCrashLog.log(
-                                app,
-                                "svc: shared connected in " +
-                                    "${SystemClock.elapsedRealtime() - startedAt}ms",
-                            )
-                        } else {
-                            if (future === built) {
-                                future = null
-                            }
-                            val cause = failure?.cause ?: failure
-                            MusicCrashLog.log(
-                                app,
-                                "svc: shared connect failed " +
-                                    "${cause?.javaClass?.simpleName}: " +
-                                    "${cause?.message}",
-                            )
-                        }
-                    },
-                    ContextCompat.getMainExecutor(app),
-                )
+                if (!ok) {
+                    binding = false
+                    pending?.complete(null)
+                    pending = null
+                    MusicCrashLog.log(app, "svc2: shared bind returned false")
+                } else {
+                    MusicCrashLog.log(
+                        app,
+                        "svc2: shared bind requested in " +
+                            "${SystemClock.elapsedRealtime() - startedAt}ms",
+                    )
+                }
             } catch (t: Throwable) {
-                future = null
+                binding = false
+                pending?.complete(null)
+                pending = null
                 MusicCrashLog.log(
                     app,
-                    "svc: shared connect start failed " +
+                    "svc2: shared bind failed " +
                         "${t.javaClass.simpleName}: ${t.message}",
                 )
             }
         }
     }
 
+    /** The bound service when it is connected right now, else null. */
+    fun connectedService(): LxPlaybackService? = service
+
+    /** The bound service's player when connected right now, else null. */
+    fun connectedPlayer(): Player? = service?.player
+
     /**
-     * The shared controller when it is connected right now. A stored
-     * controller that turns out to be disconnected is dropped (with
-     * its future) so the next [ensureConnecting] rebuilds.
+     * Waits (bounded by [timeoutMs]) for the in-flight bind and
+     * returns the connected service, or null on timeout / failure.
+     * Call [ensureConnecting] first; with nothing in flight this
+     * returns whatever [connectedService] reports.
      */
-    fun connectedController(): MediaController? {
-        val mc = controller ?: return null
-        val connected = try {
-            mc.isConnected()
-        } catch (t: Throwable) {
-            false
-        }
-        if (!connected) {
-            if (controller === mc) {
-                controller = null
-                future = null
-            }
-            return null
-        }
-        return mc
+    suspend fun awaitConnected(timeoutMs: Long): LxPlaybackService? {
+        service?.let { return it }
+        val deferred = pending ?: return service
+        val svc = withTimeoutOrNull(timeoutMs) { deferred.await() }
+        return svc ?: service
     }
 
     /**
-     * Waits (bounded by [timeoutMs]) for the in-flight shared build
-     * and returns the connected controller, or null on timeout /
-     * failure. Call [ensureConnecting] first; with nothing in flight
-     * this returns whatever [connectedController] reports.
+     * Explicitly starts [LxPlaybackService] as a foreground service so
+     * the system treats it as a started foreground service (harder to
+     * throttle on Honor/MagicOS than a merely bound one). Call while
+     * the app is in the foreground, when playback is about to be
+     * handed to the service. Failures are logged and ignored.
      */
-    suspend fun awaitConnected(timeoutMs: Long): MediaController? {
-        connectedController()?.let { return it }
-        val fut = future ?: return null
-        val app = appContext ?: return null
-        val mc = withTimeoutOrNull(timeoutMs) {
-            suspendCancellableCoroutine<MediaController?> { cont ->
-                fut.addListener(
-                    {
-                        val built = try {
-                            fut.get()
-                        } catch (t: Throwable) {
-                            null
-                        }
-                        if (cont.isActive) cont.resume(built)
-                    },
-                    ContextCompat.getMainExecutor(app),
-                )
-            }
-        } ?: return null
-        val connected = try {
-            mc.isConnected()
+    fun startForegroundService(context: Context) {
+        val app = context.applicationContext
+        appContext = app
+        try {
+            ContextCompat.startForegroundService(
+                app,
+                Intent(app, LxPlaybackService::class.java),
+            )
+            MusicCrashLog.log(app, "svc2: startForegroundService ok")
         } catch (t: Throwable) {
-            false
+            MusicCrashLog.log(
+                app,
+                "svc2: startForegroundService failed " +
+                    "${t.javaClass.simpleName}: ${t.message}",
+            )
         }
-        if (connected) {
-            controller = mc
-        }
-        return connectedController()
     }
 }

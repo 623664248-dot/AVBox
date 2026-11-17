@@ -1097,3 +1097,119 @@ player: degrade to local (connect-timeout)
 2. 播放中按 Home 退到桌面：歌继续播，通知栏出现 AVBox 播放通知（歌名/歌手/封面，可暂停），荣耀灵动岛/控制中心媒体卡显示正在播放。
 3. 回到音乐页：底部出现迷你播放条，暂停/下一首/关闭可用，点条身回播放页且不重头播。
 4. 若仍不行：再发一次 music_crash.log——新版日志带异常原文（预期能看到 "svc: shared connected" 则说明已连上）。
+
+## v1.16.0 — 后台播放重构：弃用 media3 会话，改同进程绑定服务
+
+Torres 于 2026-11-17 10:43 反馈 v1.15.4「还是不行」——`<queries>` 可见性
+声明没有改变荣耀/MagicOS 上 `queryIntentServices(MediaSessionService,
+本包)` 返回空结果的事实，SessionToken 构造依旧抛
+IllegalArgumentException。结论：media3 的 MediaSessionService /
+MediaController 路线在这台设备上走不通，本版整体替换，不再有任何
+SessionToken / MediaController 参与音乐后台播放。
+
+### 新架构（同进程 LocalBinder + 框架 MediaSession + 手工通知）
+
+- `music/LxPlaybackService.kt` 重写为普通 `android.app.Service`：
+  内部仍持一个 ExoPlayer（同一套 DefaultHttpDataSource.Factory +
+  音乐 AudioAttributes + handleAudioFocus）；新增 `LocalBinder`
+  直接交出服务对象，服务对外暴露 player、`setHeaders(map)`（写入
+  HTTP 工厂默认请求属性，与本地播放器同一机制）、`audioSessionId`。
+  旧的两个自定义 SessionCommand（SET_HEADERS /
+  GET_AUDIO_SESSION_ID）随会话层一起删除，改为同进程直调。
+- 锁屏/控制中心：服务内建框架 `android.media.session.MediaSession`
+  （tag "AVBoxMusic"，onCreate 即 setActive(true)），Callback 把
+  onPlay/onPause/onSeekTo/onStop 映射到 ExoPlayer，onSkipToNext/
+  onSkipToPrevious 转发给可注册的 `NextPrevHandler`（队列在
+  Activity/迷你条手里，服务不持队列；无人注册时上下首为空操作）。
+  PlaybackState 与 MediaMetadata（标题/歌手/专辑/封面 Uri 字符串）
+  由 Player.Listener 实时同步。
+- 前台通知手工构建：`Notification.Builder` + 本应用通知渠道
+  `avbox_music_playback`（IMPORTANCE_LOW，新字符串
+  music_notification_channel 四语齐全）；`Notification.MediaStyle`
+  绑定框架 session 的 token，compact 显示 0/1/2 三键；动作为
+  上一首 / 播放暂停（图标随 isPlaying 切换）/ 下一首，
+  PendingIntent 以显式 action 意图回送服务、onStartCommand 分发
+  （FLAG_UPDATE_CURRENT | IMMUTABLE、独立 requestCode）。
+  startForeground 在 onCreate 用初始通知先行调用、onStartCommand
+  每次再保一次，后续状态变化在已前台时用 notify 刷新（布尔标记
+  把关）；onStartCommand 返回 START_STICKY。通知点击经
+  setSessionActivity 回播放页（仍用 ComponentName 全限定名，
+  music 包不 import ui.*）。
+- `music/MusicServiceConnection.kt` 重写：object 持有
+  ServiceConnection + @Volatile 服务引用 + 在飞的
+  CompletableDeferred；`ensureConnecting` 用 applicationContext
+  bindService(BIND_AUTO_CREATE)，幂等；`awaitConnected(timeoutMs)`
+  等绑定完成返回服务（或 null）；`connectedService()` /
+  `connectedPlayer()` 同步取；`startForegroundService(context)`
+  封装 ContextCompat.startForegroundService + try/catch + 日志；
+  onServiceDisconnected 清引用待重绑。日志前缀统一改 `svc2:`，
+  与旧日志区分（service onCreate / bound / startForeground ok /
+  shared bind start / shared bound / shared disconnected 等）。
+- NowPlayingState 的 Info/publish API 不变，serviceBacked 语义
+  改为「绑定服务在播」；服务的镜像监听语义与旧版一致（只维护
+  serviceBacked 记录、转曲保留富集字段、onDestroy 清自己记录）。
+
+### 播放页（LxMusicPlayerActivity）适配
+
+- MediaController 字段换成 boundService + servicePlayer（服务
+  ExoPlayer 即 Player，共享 playerListener/ticker/队列/循环逻辑
+  原样复用）；connectService 走 ensureConnecting + awaitConnected
+  （10s 预算不变）；degradeToLocal 与 6 次/5s 重试循环保留，重试
+  改为重新尝试绑定，成功仍只置 serviceReadyForNext、下一首才切
+  服务；切服务时先 stop 本地播放器防重叠（原有逻辑）。
+- headers 改直调 boundService.setHeaders；EQ 的服务侧 session id
+  改直读 boundService.audioSessionId（同进程，无命令往返、无异步
+  fetch）；startForegroundService 改走 MusicServiceConnection
+  助手（每 Activity 一次不变）。
+- 通知/锁屏上下首：Activity 连接成功时把自己的
+  NextPrevHandler（next=playNextManual、prev=playAt(index-1)）
+  注册到服务，degrade/onDestroy 时若仍是自己注册的则注销。
+- attach 流程不变，只是「服务正在播的歌」改为比对绑定服务
+  player 的 currentMediaItem.mediaId 与记录 trackKey。
+- onDestroy 只 removeListener + 注销 handler：绑定归
+  MusicServiceConnection（applicationContext）持有，不 unbind、
+  不 release 服务播放器（serviceIsShared 语义）。
+
+### 音乐页迷你条（MusicPage）适配
+
+- 删除页面自己的 MediaController/SessionToken 连接；条显隐 =
+  有 nowPlaying 记录且（本地模式 localControls 在位，或服务模式
+  绑定已建立——LaunchedEffect 里 ensureConnecting +
+  awaitConnected(10s) 置位 serviceBound）。
+- 服务模式按钮直接驱动 MusicServiceConnection.connectedPlayer()
+  （play/pause/stop）；下一首的页面侧解析逻辑不变（LxBridge/
+  PyMusicBridge 解析 + 发布记录 + setMediaItem），headers 改直调
+  connectedService()?.setHeaders，playBarTrack 参数由
+  MediaController 改为 Player。页面打开时的预热
+  ensureConnecting 调用保留（现在是绑定预热）。
+
+### 清单与依赖
+
+- AndroidManifest：LxPlaybackService 改为 exported=false、删除
+  MediaSessionService intent-filter、保留
+  foregroundServiceType="mediaPlayback"；v1.15.4 的 `<queries>`
+  块保留（无害）。media3-session 依赖保留不删（按 AGENTS.md
+  §6.3 的裁剪谨慎原则，未用依赖比误删安全）。
+
+### 已知限制
+
+- 通知为纯文本（歌名/歌手 + 上一首/播放暂停/下一首），不带封面
+  图：服务不做图片下载，避免再引入一条网络依赖；锁屏/控制中心
+  的媒体卡由框架 MediaSession 驱动，元数据含封面 Uri 字符串，
+  系统侧是否取图由荣耀系统决定。
+- 上下首依赖队列所有者注册的 NextPrevHandler：播放页销毁后
+  （只剩服务与迷你条时）通知/锁屏的上下首无人处理为空操作，
+  迷你条的下一首仍可用（页面侧解析）；播放/暂停/进度不受影响。
+- 绑定与播放器同进程：进程被系统杀死时后台播放仍会停（与旧版
+  一致）；START_STICKY + 前台服务只能降低被杀概率。
+
+### 真机验证点
+
+1. 点一首歌播放：应能正常出声（不回归）。
+2. 播放中按 Home 退到桌面：歌继续播，通知栏出现 AVBox 播放通知
+   （歌名/歌手，可暂停/上一首/下一首），荣耀灵动岛/控制中心媒体
+   卡显示正在播放。
+3. 回到音乐页：底部迷你播放条出现且不闪退，暂停/下一首/关闭
+   可用，点条身回播放页且不重头播。
+4. 若仍不行：再发一次 music_crash.log——新版日志前缀是 svc2:，
+   预期能看到 "svc2: shared bound" 与 "svc2: startForeground ok"。

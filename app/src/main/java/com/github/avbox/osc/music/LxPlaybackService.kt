@@ -1,9 +1,21 @@
 package com.github.avbox.osc.music
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Service
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
-import android.os.Bundle
+import android.media.MediaMetadata
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.os.Binder
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -11,76 +23,115 @@ import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
-import androidx.media3.session.SessionCommand
-import androidx.media3.session.SessionResult
-import com.google.common.util.concurrent.Futures
-import com.google.common.util.concurrent.ListenableFuture
+import com.github.avbox.osc.R
 
 /**
- * Background playback service for the LX music player (rewritten in
- * v1.13.3; the v1.9.0 original was unregistered in v1.9.2 after an
- * undiagnosed tap-to-play crash and is superseded by this version).
+ * Background playback service for the LX music player (v1.16.0 redesign).
  *
- * The service owns an ExoPlayer and exposes it through a [MediaSession];
- * MediaSessionService's default media notification
- * (DefaultMediaNotification.Provider) shows the title/artist/artwork
- * from each MediaItem's MediaMetadata with working play/pause from the
- * system media controls (lock screen / notification shade). The queue
- * stays in the player Activity, which hands over one resolved MediaItem
- * at a time; the notification therefore offers play/pause only, no
- * previous/next.
+ * Why this no longer uses media3's MediaSessionService / MediaController:
+ * on the test device (Honor / MagicOS) every MediaController connect
+ * failed in 1-2 ms with an IllegalArgumentException out of
+ * SessionToken's constructor — its queryIntentServices(
+ * MediaSessionService action, own package) lookup returns empty for
+ * this app's own service even though the merged manifest is complete,
+ * and the v1.15.4 <queries> visibility declarations did not change
+ * that. The media3 session route is therefore dead on that device.
  *
- * URL resolution stays in the UI layer (LxMusicPlayerActivity resolves a
- * direct link through LxBridge / PyMusicBridge first). Two custom
- * session commands support that hand-off:
- *  - [ACTION_SET_HEADERS]: the Activity pushes the resolved track's
- *    HTTP headers; they are applied to this service's shared
- *    [DefaultHttpDataSource.Factory] default request properties — the
- *    same mechanism the Activity's local player uses (v1.13.0).
- *  - [ACTION_GET_AUDIO_SESSION_ID]: returns the service player's audio
- *    session id so the Activity can attach its AudioFX EQ to the
- *    service's output (MediaController exposes no session id).
+ * This service is a plain same-process [Service] instead:
+ *  - It owns one ExoPlayer and hands it out through a [LocalBinder]
+ *    (direct object reference, no IPC, no SessionToken, no package
+ *    manager query). MusicServiceConnection owns the binding.
+ *  - Lock-screen / control-center integration comes from a framework
+ *    [MediaSession] (android.media.session), whose state and metadata
+ *    are kept in sync with the player.
+ *  - The foreground notification is built manually with a
+ *    Notification.MediaStyle bound to the framework session token,
+ *    with previous / play-pause / next actions delivered back to this
+ *    service as explicit intents.
  *
- * If connecting to this service fails for any reason, the Activity
- * degrades to its in-Activity player for the rest of the session, so
- * the worst case is the pre-v1.13.3 behaviour.
+ * The queue still lives in the player Activity (or the music page's
+ * mini bar): the service plays one resolved MediaItem at a time, and
+ * next/previous — from the notification, the lock screen or the
+ * framework session — are forwarded to the registered
+ * [NextPrevHandler]. With no handler registered they are no-ops.
+ *
+ * URL resolution stays in the UI layer (LxMusicPlayerActivity resolves
+ * a direct link through LxBridge / PyMusicBridge first); the resolved
+ * track's HTTP headers are applied through [setHeaders], the same
+ * DefaultHttpDataSource.Factory mechanism the local player uses.
  */
-class LxPlaybackService : MediaSessionService() {
+class LxPlaybackService : Service() {
+
+    /** Queue owner callbacks for notification / lock-screen next/prev. */
+    interface NextPrevHandler {
+        fun onNext()
+        fun onPrevious()
+    }
+
+    inner class LocalBinder : Binder() {
+        fun getService(): LxPlaybackService = this@LxPlaybackService
+    }
 
     companion object {
-        /** Custom command: push the current track's HTTP headers. */
-        const val ACTION_SET_HEADERS = "com.github.avbox.osc.music.SET_HEADERS"
+        private const val CHANNEL_ID = "avbox_music_playback"
+        private const val NOTIFICATION_ID = 2001
 
-        /** Custom command: read the service player's audio session id. */
-        const val ACTION_GET_AUDIO_SESSION_ID =
-            "com.github.avbox.osc.music.GET_AUDIO_SESSION_ID"
+        private const val ACTION_CMD_PLAY_PAUSE =
+            "com.github.avbox.osc.music.CMD_PLAY_PAUSE"
+        private const val ACTION_CMD_PLAY = "com.github.avbox.osc.music.CMD_PLAY"
+        private const val ACTION_CMD_PAUSE = "com.github.avbox.osc.music.CMD_PAUSE"
+        private const val ACTION_CMD_PREV = "com.github.avbox.osc.music.CMD_PREV"
+        private const val ACTION_CMD_NEXT = "com.github.avbox.osc.music.CMD_NEXT"
+        private const val ACTION_CMD_STOP = "com.github.avbox.osc.music.CMD_STOP"
 
-        /** Bundle key (in [ACTION_SET_HEADERS] args): the header names. */
-        const val EXTRA_HEADER_KEYS = "headerKeys"
-
-        /** Bundle key prefix (in [ACTION_SET_HEADERS] args): value of one header. */
-        const val EXTRA_HEADER_VALUE_PREFIX = "hv:"
-
-        /** Bundle key (in [ACTION_GET_AUDIO_SESSION_ID] result): the session id. */
-        const val EXTRA_AUDIO_SESSION_ID = "audioSessionId"
+        private const val REQ_PLAY_PAUSE = 11
+        private const val REQ_PREV = 12
+        private const val REQ_NEXT = 13
     }
+
+    /** Registered by the queue owner (player Activity / mini bar). */
+    @Volatile
+    var nextPrevHandler: NextPrevHandler? = null
+
+    private val binder = LocalBinder()
 
     /**
      * Shared HTTP factory for the service player: py spiders may answer
-     * playerContent with required headers, pushed per track through
-     * [ACTION_SET_HEADERS] into the factory's default request properties.
+     * playerContent with required headers, applied per track through
+     * [setHeaders] into the factory's default request properties.
      */
     private val httpDataSourceFactory = DefaultHttpDataSource.Factory()
         .setAllowCrossProtocolRedirects(true)
 
-    private var mediaSession: MediaSession? = null
-    private var player: ExoPlayer? = null
+    private var exo: ExoPlayer? = null
+    private var frameworkSession: MediaSession? = null
+    private var foregroundStarted = false
+
+    /** The player this service owns; null only before onCreate / after onDestroy. */
+    val player: ExoPlayer?
+        get() = exo
+
+    /** Audio session id of the service player (for the Activity's AudioFX EQ). */
+    val audioSessionId: Int
+        get() = try {
+            exo?.audioSessionId ?: 0
+        } catch (t: Throwable) {
+            0
+        }
+
+    /** Applies a resolved track's HTTP headers to the shared HTTP factory. */
+    fun setHeaders(headers: Map<String, String>) {
+        try {
+            httpDataSourceFactory.setDefaultRequestProperties(headers)
+        } catch (t: Throwable) {
+            // Headers are best effort; playback continues without them.
+        }
+    }
 
     /**
      * Mirrors this player's state into [NowPlayingState] so the music
-     * page's mini bar stays truthful after the player Activity is gone.
+     * page's mini bar stays truthful after the player Activity is gone,
+     * and keeps the framework session + notification in sync.
      * Transitions republish from the item's metadata (its mediaId is
      * the song key) and keep the enrichment fields — queue, source
      * label, canNext — of the record published just before the
@@ -92,6 +143,7 @@ class LxPlaybackService : MediaSessionService() {
             if (NowPlayingState.current()?.serviceBacked == true) {
                 NowPlayingState.updatePlaying(isPlaying)
             }
+            syncSessionAndNotification()
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -108,13 +160,14 @@ class LxPlaybackService : MediaSessionService() {
                         ?: existing?.singer ?: "",
                     img = metadata.artworkUri?.toString() ?: existing?.img,
                     sourceLabel = existing?.sourceLabel ?: "",
-                    isPlaying = player?.isPlaying == true,
+                    isPlaying = exo?.isPlaying == true,
                     canNext = existing?.canNext ?: false,
                     serviceBacked = true,
                     queueJson = existing?.queueJson ?: "",
                     queueIndex = existing?.queueIndex ?: 0,
                 ),
             )
+            syncSessionAndNotification()
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -123,78 +176,235 @@ class LxPlaybackService : MediaSessionService() {
             ) {
                 NowPlayingState.updatePlaying(false)
             }
+            syncSessionAndNotification()
         }
     }
 
-    private val sessionCallback = object : MediaSession.Callback {
-        override fun onCustomCommand(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            customCommand: SessionCommand,
-            args: Bundle,
-        ): ListenableFuture<SessionResult> {
-            return when (customCommand.customAction) {
-                ACTION_SET_HEADERS -> {
-                    applyHeaders(args)
-                    Futures.immediateFuture(
-                        SessionResult(SessionResult.RESULT_SUCCESS),
-                    )
-                }
+    /** Framework transport controls: playback goes to the player, queue moves to the handler. */
+    private val sessionCallback = object : MediaSession.Callback() {
+        override fun onPlay() {
+            exo?.play()
+        }
 
-                ACTION_GET_AUDIO_SESSION_ID -> {
-                    val extras = Bundle()
-                    extras.putInt(
-                        EXTRA_AUDIO_SESSION_ID,
-                        player?.audioSessionId ?: 0,
-                    )
-                    Futures.immediateFuture(
-                        SessionResult(SessionResult.RESULT_SUCCESS, extras),
-                    )
-                }
+        override fun onPause() {
+            exo?.pause()
+        }
 
-                else -> Futures.immediateFuture(
-                    SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED),
-                )
+        override fun onSkipToNext() {
+            nextPrevHandler?.onNext()
+        }
+
+        override fun onSkipToPrevious() {
+            nextPrevHandler?.onPrevious()
+        }
+
+        override fun onSeekTo(pos: Long) {
+            try {
+                exo?.seekTo(pos)
+            } catch (t: Throwable) {
+                // no seekable media loaded
             }
         }
-    }
 
-    /** Applies a pushed header set to the shared HTTP factory. */
-    private fun applyHeaders(args: Bundle) {
-        val keys = args.getStringArrayList(EXTRA_HEADER_KEYS) ?: return
-        val headers = LinkedHashMap<String, String>()
-        for (key in keys) {
-            val value = args.getString(EXTRA_HEADER_VALUE_PREFIX + key)
-            if (value != null) {
-                headers[key] = value
-            }
+        override fun onStop() {
+            exo?.pause()
         }
-        httpDataSourceFactory.setDefaultRequestProperties(headers)
     }
 
     override fun onCreate() {
         super.onCreate()
         MusicCrashLog.install(this)
-        MusicCrashLog.log(this, "svc: service onCreate")
-        val exo = ExoPlayer.Builder(this)
+        MusicCrashLog.log(this, "svc2: service onCreate")
+        createNotificationChannel()
+        val player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpDataSourceFactory))
             .build()
-        exo.setAudioAttributes(
+        player.setAudioAttributes(
             AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .build(),
             true,
         )
-        exo.addListener(nowPlayingListener)
-        player = exo
-        // Notification / lock-screen tap returns to the player page
-        // through the session activity (media3's default mechanism:
-        // DefaultMediaNotification uses it as the content intent). The
-        // Activity is referenced by component name, not by class: this
-        // file lives in the music package and must not import ui.*
-        // (no new package cycles, see AGENTS.md).
-        val sessionActivity = PendingIntent.getActivity(
+        player.addListener(nowPlayingListener)
+        exo = player
+        // Framework media session for lock-screen / control-center
+        // integration. The session activity returns notification taps
+        // to the player page; the Activity is referenced by component
+        // name, not by class: this file lives in the music package and
+        // must not import ui.* (no new package cycles, see AGENTS.md).
+        val session = MediaSession(this, "AVBoxMusic")
+        session.setCallback(sessionCallback, Handler(Looper.getMainLooper()))
+        session.setSessionActivity(sessionActivityIntent())
+        session.isActive = true
+        frameworkSession = session
+        syncSessionAndNotification()
+        // Promote to foreground right away with the initial minimal
+        // notification; later updates go through notify once this has
+        // succeeded at least once (see updateNotification).
+        ensureForeground()
+    }
+
+    override fun onBind(intent: Intent?): IBinder {
+        MusicCrashLog.log(this, "svc2: bound")
+        return binder
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        MusicCrashLog.log(this, "svc2: unbound")
+        return super.onUnbind(intent)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_CMD_PLAY_PAUSE -> {
+                val player = exo
+                if (player != null) {
+                    if (player.isPlaying) player.pause() else player.play()
+                }
+            }
+
+            ACTION_CMD_PLAY -> exo?.play()
+            ACTION_CMD_PAUSE -> exo?.pause()
+            ACTION_CMD_NEXT -> nextPrevHandler?.onNext()
+            ACTION_CMD_PREV -> nextPrevHandler?.onPrevious()
+            ACTION_CMD_STOP -> {
+                try {
+                    exo?.pause()
+                    exo?.stop()
+                } catch (t: Throwable) {
+                    // already stopped
+                }
+                stopForeground(true)
+                foregroundStarted = false
+                stopSelf()
+                return START_NOT_STICKY
+            }
+        }
+        ensureForeground()
+        return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val player = exo
+        if (player != null && !player.playWhenReady) {
+            stopSelf()
+        }
+    }
+
+    override fun onDestroy() {
+        MusicCrashLog.log(this, "svc2: service onDestroy")
+        // The service dying ends service playback: its mini-bar record
+        // must not outlive it (a local record belongs to the Activity).
+        if (NowPlayingState.current()?.serviceBacked == true) {
+            NowPlayingState.clear()
+        }
+        nextPrevHandler = null
+        try {
+            frameworkSession?.isActive = false
+            frameworkSession?.release()
+        } catch (t: Throwable) {
+            // already released
+        }
+        frameworkSession = null
+        try {
+            exo?.removeListener(nowPlayingListener)
+            exo?.release()
+        } catch (t: Throwable) {
+            // already released
+        }
+        exo = null
+        stopForeground(true)
+        foregroundStarted = false
+        super.onDestroy()
+    }
+
+    // ------------------------------------------------------------ session
+
+    /** Pushes the player's current metadata + playback state into the framework session. */
+    private fun syncSessionAndNotification() {
+        val session = frameworkSession ?: return
+        val player = exo ?: return
+        try {
+            val item = player.currentMediaItem
+            val metadata = item?.mediaMetadata
+            val builder = MediaMetadata.Builder()
+                .putString(
+                    MediaMetadata.METADATA_KEY_TITLE,
+                    metadata?.title?.toString() ?: "",
+                )
+                .putString(
+                    MediaMetadata.METADATA_KEY_ARTIST,
+                    metadata?.artist?.toString() ?: "",
+                )
+                .putString(
+                    MediaMetadata.METADATA_KEY_ALBUM,
+                    metadata?.albumTitle?.toString() ?: "",
+                )
+            val artwork = metadata?.artworkUri?.toString()
+            if (!artwork.isNullOrEmpty()) {
+                builder.putString(MediaMetadata.METADATA_KEY_ART_URI, artwork)
+            }
+            val duration = player.duration
+            if (duration > 0) {
+                builder.putLong(MediaMetadata.METADATA_KEY_DURATION, duration)
+            }
+            session.setMetadata(builder.build())
+            val state = when (player.playbackState) {
+                Player.STATE_BUFFERING -> PlaybackState.STATE_BUFFERING
+                Player.STATE_ENDED -> PlaybackState.STATE_STOPPED
+                Player.STATE_READY ->
+                    if (player.isPlaying) {
+                        PlaybackState.STATE_PLAYING
+                    } else {
+                        PlaybackState.STATE_PAUSED
+                    }
+
+                else -> PlaybackState.STATE_NONE
+            }
+            val actions = PlaybackState.ACTION_PLAY or
+                PlaybackState.ACTION_PAUSE or
+                PlaybackState.ACTION_PLAY_PAUSE or
+                PlaybackState.ACTION_SKIP_TO_NEXT or
+                PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+                PlaybackState.ACTION_SEEK_TO or
+                PlaybackState.ACTION_STOP
+            session.setPlaybackState(
+                PlaybackState.Builder()
+                    .setActions(actions)
+                    .setState(
+                        state,
+                        player.currentPosition.coerceAtLeast(0L),
+                        if (player.isPlaying) 1f else 0f,
+                    )
+                    .build(),
+            )
+        } catch (t: Throwable) {
+            // Session sync is best effort; playback is unaffected.
+        }
+        updateNotification()
+    }
+
+    // ------------------------------------------------------- notification
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        try {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.music_notification_channel),
+                NotificationManager.IMPORTANCE_LOW,
+            )
+            val manager =
+                getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            manager?.createNotificationChannel(channel)
+        } catch (t: Throwable) {
+            // channel creation is best effort
+        }
+    }
+
+    private fun sessionActivityIntent(): PendingIntent {
+        return PendingIntent.getActivity(
             this,
             0,
             Intent().setComponent(
@@ -205,38 +415,98 @@ class LxPlaybackService : MediaSessionService() {
             ),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        mediaSession = MediaSession.Builder(this, exo)
-            .setCallback(sessionCallback)
-            .setSessionActivity(sessionActivity)
-            .build()
     }
 
-    override fun onGetSession(
-        controllerInfo: MediaSession.ControllerInfo,
-    ): MediaSession? {
-        MusicCrashLog.log(this, "svc: onGetSession")
-        return mediaSession
+    private fun actionPendingIntent(action: String, requestCode: Int): PendingIntent {
+        val intent = Intent(this, LxPlaybackService::class.java).setAction(action)
+        return PendingIntent.getService(
+            this,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        val sessionPlayer = mediaSession?.player
-        if (sessionPlayer != null && !sessionPlayer.playWhenReady) {
-            stopSelf()
+    /**
+     * Text-only media notification (title/artist + prev/play-pause/next).
+     * No artwork bitmap: the service never downloads images, and a
+     * text notification that always appears beats an artwork one that
+     * depends on another network fetch.
+     */
+    private fun buildNotification(): Notification {
+        val player = exo
+        val metadata = player?.currentMediaItem?.mediaMetadata
+        val title = metadata?.title?.toString()?.takeIf { it.isNotEmpty() }
+            ?: getString(R.string.music_default_name)
+        val artist = metadata?.artist?.toString() ?: ""
+        val playing = player?.isPlaying == true
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+        builder
+            .setSmallIcon(R.drawable.ic_notification_music)
+            .setContentTitle(title)
+            .setContentText(artist)
+            .setContentIntent(sessionActivityIntent())
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setOngoing(playing)
+            .setShowWhen(false)
+            .setStyle(
+                Notification.MediaStyle()
+                    .setMediaSession(frameworkSession?.sessionToken)
+                    .setShowActionsInCompactView(0, 1, 2),
+            )
+            .addAction(
+                R.drawable.exo_icon_previous,
+                getString(R.string.music_previous),
+                actionPendingIntent(ACTION_CMD_PREV, REQ_PREV),
+            )
+            .addAction(
+                if (playing) R.drawable.exo_icon_pause else R.drawable.exo_icon_play,
+                getString(
+                    if (playing) R.string.common_pause else R.string.common_play,
+                ),
+                actionPendingIntent(ACTION_CMD_PLAY_PAUSE, REQ_PLAY_PAUSE),
+            )
+            .addAction(
+                R.drawable.exo_icon_next,
+                getString(R.string.music_next),
+                actionPendingIntent(ACTION_CMD_NEXT, REQ_NEXT),
+            )
+        return builder.build()
+    }
+
+    /** Calls startForeground with the current notification; failures are logged, never thrown. */
+    private fun ensureForeground() {
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification())
+            if (!foregroundStarted) {
+                foregroundStarted = true
+                MusicCrashLog.log(this, "svc2: startForeground ok")
+            }
+        } catch (t: Throwable) {
+            MusicCrashLog.log(
+                this,
+                "svc2: startForeground failed ${t.javaClass.simpleName}: ${t.message}",
+            )
         }
     }
 
-    override fun onDestroy() {
-        // The service dying ends service playback: its mini-bar record
-        // must not outlive it (a local record belongs to the Activity).
-        if (NowPlayingState.current()?.serviceBacked == true) {
-            NowPlayingState.clear()
+    /** Refreshes the notification once the service is foreground; promotes it otherwise. */
+    private fun updateNotification() {
+        if (!foregroundStarted) {
+            ensureForeground()
+            return
         }
-        mediaSession?.run {
-            player.release()
-            release()
+        try {
+            val manager =
+                getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            manager?.notify(NOTIFICATION_ID, buildNotification())
+        } catch (t: Throwable) {
+            // refresh is best effort
         }
-        mediaSession = null
-        player = null
-        super.onDestroy()
     }
 }

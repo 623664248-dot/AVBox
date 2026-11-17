@@ -97,6 +97,7 @@
     <string name="music_script_init_failed">音源腳本初始化失敗：%1$s</string>
     <string name="music_script_not_ready">音源未就緒，請稍候</string>
     <string name="music_no_source">暫無音源，點左上角唱片按鈕添加</string>
+    <string name="music_notification_channel">音樂播放</string>
     <string name="music_hot_title">熱搜榜</string>
     <string name="music_empty_result">沒有找到相關歌曲</string>
     <string name="music_no_lyric">暫無歌詞</string>

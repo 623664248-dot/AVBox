@@ -167,15 +167,13 @@
             android:foregroundServiceType="mediaPlayback"
             android:exported="false" />
 
+        <!-- v1.16.0: plain same-process bound foreground service (LocalBinder);
+             no longer a media3 MediaSessionService, so no session intent-filter
+             and not exported — only this app binds/starts it. -->
         <service
             android:name=".music.LxPlaybackService"
             android:foregroundServiceType="mediaPlayback"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="androidx.media.session.MediaSessionService" />
-                <action android:name="android.media.session.MediaSessionService" />
-            </intent-filter>
-        </service>
+            android:exported="false" />
     </application>
 
 </manifest>

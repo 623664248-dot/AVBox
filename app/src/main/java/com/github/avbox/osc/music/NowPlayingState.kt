@@ -23,7 +23,8 @@ import kotlinx.coroutines.flow.asStateFlow
  *    service mode (the player Activity is usually destroyed by then).
  *
  * [Info.serviceBacked] tells the two playback worlds apart: service
- * records are controllable from anywhere through a MediaController;
+ * records are controllable from anywhere through the bound
+ * LxPlaybackService's player (MusicServiceConnection, v1.16.0);
  * local records (the Activity's degraded in-process player) are
  * controllable only through [localControls], which the owning Activity
  * registers while it lives and unregisters on destroy — local playback

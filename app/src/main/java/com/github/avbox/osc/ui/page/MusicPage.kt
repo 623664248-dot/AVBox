@@ -5,9 +5,7 @@
 
 package com.github.avbox.osc.ui.page
 
-import android.content.ComponentName
 import android.content.Context
-import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -61,7 +59,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -92,16 +89,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.media3.session.MediaController
-import androidx.media3.session.SessionCommand
-import androidx.media3.session.SessionToken
+import androidx.media3.common.Player
 import coil3.compose.AsyncImage
 import com.github.avbox.osc.R
 import com.github.avbox.osc.music.LxBridge
-import com.github.avbox.osc.music.LxPlaybackService
 import com.github.avbox.osc.music.MusicChart
 import com.github.avbox.osc.music.MusicServiceConnection
 import com.github.avbox.osc.music.MusicTrack
@@ -115,12 +108,8 @@ import com.github.avbox.osc.ui.music.MusicAppearance
 import com.github.avbox.osc.ui.music.MusicAppearanceSheet
 import com.github.avbox.osc.ui.music.MusicBackground
 import com.github.avbox.osc.util.KV
-import com.google.common.util.concurrent.ListenableFuture
-import java.util.concurrent.TimeUnit
 import kotlin.random.Random
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 @Composable
 fun MusicPage(
@@ -193,77 +182,37 @@ fun MusicPage(
         }
     }
 
-    // Warm the shared playback-service connection while the user is
+    // Warm the shared playback-service binding while the user is
     // still browsing (v1.15.1): the player page then adopts an
-    // already-connected controller instead of cold-starting the
-    // service on tap, which timed out on the test device and silently
-    // degraded every session to in-page playback.
+    // already-bound service instead of cold-starting it on tap,
+    // which timed out on the test device and silently degraded
+    // every session to in-page playback.
     LaunchedEffect(Unit) {
         MusicServiceConnection.ensureConnecting(context)
     }
 
-    // Mini player bar: the shared now-playing record plus this page's
-    // own lightweight MediaController for service-backed records. The
-    // connection is best-effort — any failure just keeps the bar
+    // Mini player bar: the shared now-playing record plus, for
+    // service-backed records, the process-wide binding from
+    // MusicServiceConnection (v1.16.0: a same-process LocalBinder —
+    // the bar drives the bound service's player directly). The
+    // binding is best-effort — any failure just keeps the bar
     // hidden and never affects the page itself.
     val nowPlaying by NowPlayingState.info.collectAsStateWithLifecycle()
-    var miniController by remember { mutableStateOf<MediaController?>(null) }
+    var serviceBound by remember { mutableStateOf(false) }
     val barScope = rememberCoroutineScope()
-    DisposableEffect(nowPlaying?.serviceBacked) {
+    LaunchedEffect(nowPlaying?.serviceBacked) {
         if (nowPlaying?.serviceBacked != true) {
-            return@DisposableEffect onDispose { }
+            serviceBound = false
+            return@LaunchedEffect
         }
-        val appContext = context.applicationContext
-        var future: ListenableFuture<MediaController>? = null
-        var disposed = false
-        try {
-            val token = SessionToken(
-                appContext,
-                ComponentName(appContext, LxPlaybackService::class.java),
-            )
-            val built = MediaController.Builder(appContext, token).buildAsync()
-            future = built
-            built.addListener(
-                {
-                    val mc = try {
-                        built.get()
-                    } catch (t: Throwable) {
-                        null
-                    }
-                    if (mc != null && !disposed) {
-                        miniController = mc
-                    } else {
-                        try {
-                            mc?.release()
-                        } catch (t: Throwable) {
-                            // already gone
-                        }
-                    }
-                },
-                ContextCompat.getMainExecutor(appContext),
-            )
-        } catch (t: Throwable) {
-            // silent: no controller, no bar
-        }
-        onDispose {
-            disposed = true
-            miniController?.let { mc ->
-                try {
-                    mc.release()
-                } catch (t: Throwable) {
-                    // already gone
-                }
-            }
-            miniController = null
-            try {
-                future?.cancel(true)
-            } catch (t: Throwable) {
-                // already done or released above
-            }
+        serviceBound = MusicServiceConnection.connectedService() != null
+        if (!serviceBound) {
+            MusicServiceConnection.ensureConnecting(context)
+            serviceBound = MusicServiceConnection.awaitConnected(10_000L) != null
         }
     }
     val miniBarVisible = nowPlaying != null &&
-        (nowPlaying?.serviceBacked != true || miniController != null)
+        (nowPlaying?.serviceBacked != true || serviceBound)
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Custom background (when set) spans the whole page; the content
@@ -568,7 +517,7 @@ fun MusicPage(
                 MiniPlayerBar(
                     info = np,
                     controlsEnabled = if (np.serviceBacked) {
-                        miniController != null
+                        serviceBound
                     } else {
                         NowPlayingState.localControls != null
                     },
@@ -576,9 +525,9 @@ fun MusicPage(
                     onPlayPause = {
                         try {
                             if (np.serviceBacked) {
-                                val mc = miniController
-                                if (mc != null) {
-                                    if (mc.isPlaying) mc.pause() else mc.play()
+                                val player = MusicServiceConnection.connectedPlayer()
+                                if (player != null) {
+                                    if (player.isPlaying) player.pause() else player.play()
                                 }
                             } else {
                                 NowPlayingState.localControls?.playPause()
@@ -589,13 +538,13 @@ fun MusicPage(
                     },
                     onNext = {
                         if (np.serviceBacked) {
-                            val mc = miniController
-                            if (mc != null && np.canNext) {
+                            val player = MusicServiceConnection.connectedPlayer()
+                            if (player != null && np.canNext) {
                                 barScope.launch {
                                     val queue = MusicTrack.listFromJson(np.queueJson)
                                     val next = barNextIndex(queue.size, np.queueIndex)
                                     if (next != null &&
-                                        !playBarTrack(context, mc, queue, next)
+                                        !playBarTrack(context, player, queue, next)
                                     ) {
                                         Toast.makeText(
                                             context,
@@ -616,7 +565,7 @@ fun MusicPage(
                     onClose = {
                         if (np.serviceBacked) {
                             try {
-                                miniController?.stop()
+                                MusicServiceConnection.connectedPlayer()?.stop()
                             } catch (t: Throwable) {
                                 // already gone
                             }
@@ -1603,45 +1552,16 @@ private fun barSourceLabel(context: Context, track: MusicTrack): String {
 }
 
 /**
- * Pushes a track's HTTP headers to the playback service, the same
- * custom-command protocol the player page uses (best effort, bounded).
- */
-private suspend fun sendBarHeaders(
-    mc: MediaController,
-    headers: Map<String, String>,
-) {
-    try {
-        val args = Bundle()
-        args.putStringArrayList(
-            LxPlaybackService.EXTRA_HEADER_KEYS,
-            ArrayList(headers.keys),
-        )
-        for ((key, value) in headers) {
-            args.putString(LxPlaybackService.EXTRA_HEADER_VALUE_PREFIX + key, value)
-        }
-        val future = mc.sendCustomCommand(
-            SessionCommand(LxPlaybackService.ACTION_SET_HEADERS, Bundle()),
-            args,
-        )
-        withContext(Dispatchers.IO) {
-            future.get(2000L, TimeUnit.MILLISECONDS)
-        }
-    } catch (t: Throwable) {
-        if (t is kotlinx.coroutines.CancellationException) throw t
-        // best effort only
-    }
-}
-
-/**
  * Mini-bar "next": resolves [queue]'s track at [index] exactly like
  * the player page does (LX script or py spider), publishes the new
- * now-playing record, then hands the MediaItem to the service through
- * the page's controller. Returns false on any failure; the caller
+ * now-playing record, then hands the MediaItem to the bound service's
+ * player. The track's HTTP headers are applied to the service first
+ * (direct call, v1.16.0). Returns false on any failure; the caller
  * toasts and the current song keeps playing.
  */
 private suspend fun playBarTrack(
     context: Context,
-    controller: MediaController,
+    player: Player,
     queue: List<MusicTrack>,
     index: Int,
 ): Boolean {
@@ -1659,7 +1579,7 @@ private suspend fun playBarTrack(
             url = LxBridge.getMusicUrl(track)
             headers = emptyMap()
         }
-        sendBarHeaders(controller, headers)
+        MusicServiceConnection.connectedService()?.setHeaders(headers)
         NowPlayingState.publish(
             NowPlayingState.Info(
                 trackKey = NowPlayingState.keyOf(track),
@@ -1674,9 +1594,9 @@ private suspend fun playBarTrack(
                 queueIndex = index,
             ),
         )
-        controller.setMediaItem(NowPlayingState.mediaItemFor(track, url))
-        controller.prepare()
-        controller.play()
+        player.setMediaItem(NowPlayingState.mediaItemFor(track, url))
+        player.prepare()
+        player.play()
         true
     } catch (t: Throwable) {
         false
