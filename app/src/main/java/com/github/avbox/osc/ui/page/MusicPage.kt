@@ -1035,11 +1035,13 @@ private fun TopRoundButton(
  * The source-script entry of the top row: a self-drawn vinyl record
  * (black disc, groove rings, a light arc, colored center label with an
  * off-center dot, spindle hole) inside the shared round-button shell.
- * While the shared now-playing record reports playback the disc spins
- * at one turn per 6 seconds; paused or idle it rests. The angle is
- * accumulated frame by frame only while playing, so toggling play
- * state never makes the disc jump. Tapping opens the same source
- * dialog the removed floating button used to open.
+ * The disc always turns: at one turn per 20 seconds while idle, and
+ * one turn per 6 seconds while the shared now-playing record reports
+ * playback. The angle is accumulated frame by frame and the current
+ * rate eases toward its target over roughly 0.6 seconds, so toggling
+ * play state never makes the disc jump or snap to a new speed.
+ * Tapping opens the same source dialog the removed floating button
+ * used to open.
  */
 @Composable
 private fun VinylSourceButton(
@@ -1049,12 +1051,23 @@ private fun VinylSourceButton(
     var rotation by remember { mutableStateOf(0f) }
     val playingNow = rememberUpdatedState(playing)
     LaunchedEffect(Unit) {
+        // Degrees per millisecond: one turn per 20s while idle, one
+        // turn per 6s while playing. The current rate moves toward the
+        // target at a fixed slope (full swing in ~600ms), so speeding
+        // up and slowing down both feel like a record changing speed.
+        val idleRate = 360f / 20_000f
+        val playingRate = 360f / 6_000f
+        val rateSlopePerMs = (playingRate - idleRate) / 600f
+        var rate = idleRate
         var lastFrameMs = -1L
         while (true) {
             withFrameMillis { frameMs ->
-                if (lastFrameMs >= 0L && playingNow.value) {
-                    // 360 degrees per 6000ms of playing time.
-                    rotation = (rotation + (frameMs - lastFrameMs) * 0.06f) % 360f
+                if (lastFrameMs >= 0L) {
+                    val dtMs = (frameMs - lastFrameMs).toFloat()
+                    val target = if (playingNow.value) playingRate else idleRate
+                    val maxStep = rateSlopePerMs * dtMs
+                    rate += (target - rate).coerceIn(-maxStep, maxStep)
+                    rotation = (rotation + dtMs * rate) % 360f
                 }
                 lastFrameMs = frameMs
             }
