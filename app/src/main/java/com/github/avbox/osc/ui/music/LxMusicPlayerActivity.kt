@@ -1,19 +1,24 @@
 package com.github.avbox.osc.ui.music
 
+import android.Manifest
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer
 import android.media.audiofx.Virtualizer
+import android.media.audiofx.Visualizer
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.graphics.Color
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.AudioAttributes
@@ -51,6 +56,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
 import kotlin.random.Random
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -110,6 +116,9 @@ class LxMusicPlayerActivity : BaseActivity() {
 
         /** How long the first playAt waits for the connection attempt. */
         private const val SERVICE_CONNECT_WAIT_MS = 10000L
+
+        /** Rhythm-visualizer bar count (v1.20.0). */
+        private const val VIZ_BARS = 28
 
         /** Delay between in-session service connection retries. */
         private const val SERVICE_RETRY_INTERVAL_MS = 5000L
@@ -291,6 +300,20 @@ class LxMusicPlayerActivity : BaseActivity() {
     private var virtualizer: Virtualizer? = null
     private var effectsSessionId: Int = 0
 
+    // Rhythm visualizer (v1.20.0): an audiofx Visualizer riding the
+    // same audio session as the EQ, feeding FFT bar levels into the
+    // page state. Purely decorative — every step is guarded, and a
+    // device without visualizer support (or without the microphone
+    // permission the Visualizer API demands) simply shows no bars.
+    private var audioVisualizer: Visualizer? = null
+    private var vizSessionId: Int = 0
+    private val vizBars = FloatArray(VIZ_BARS)
+
+    private val vizPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) ensureVisualizer()
+        }
+
     override fun shouldRefreshAutoSize(): Boolean = true
 
     override fun hideSysBar() {}
@@ -299,8 +322,24 @@ class LxMusicPlayerActivity : BaseActivity() {
         MusicCrashLog.install(this)
         enableTransparentEdgeToEdge()
         PermissionHelper.requestNotificationIfNeeded(this)
+        // The rhythm visualizer needs RECORD_AUDIO (the Visualizer
+        // API requires it), so ask once when the player opens; the
+        // same grant also covers the music page's voice search and
+        // 听歌识曲. Denied → no bars, and nothing else changes.
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            vizPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
         var queue = MusicTrack.listFromJson(intent?.getStringExtra(EXTRA_QUEUE))
         var startIndex = intent?.getIntExtra(EXTRA_INDEX, 0) ?: 0
+        // A launch with no queue extra (mini bar, notification /
+        // 灵动岛 session activity, launcher relaunch) can only mean
+        // "show me what's playing": init tries to attach it to the
+        // live service session below instead of restarting the song.
+        val queueLessLaunch = queue.isEmpty()
         if (queue.isEmpty()) {
             // Queue-less launch (notification / session-activity tap
             // after the previous instance was destroyed): restore the
@@ -367,22 +406,33 @@ class LxMusicPlayerActivity : BaseActivity() {
                 delay(400)
             }
         }
-        if (!tryAttach()) {
+        if (!tryAttach(queueLessLaunch)) {
             playAt(state.index)
         }
     }
 
     /**
-     * Attach entry (mini bar body tap): when the shared now-playing
-     * record names a service-backed song that is part of the restored
-     * queue, set the page up for that song WITHOUT starting playback
-     * and bind to the live session instead. Any mismatch — no record,
-     * a local record, the song is not in the queue — returns false and
-     * init falls back to the normal fresh start, so a stale bar can
-     * never produce a dead page.
+     * Attach entry (mini bar body tap, or any queue-less launch):
+     * when the shared now-playing record names a service-backed song
+     * that is part of the restored queue, set the page up for that
+     * song WITHOUT starting playback and bind to the live session
+     * instead. Any mismatch — no record, a local record, the song is
+     * not in the queue — returns false and init falls back to the
+     * normal fresh start, so a stale entry can never produce a dead
+     * page.
+     *
+     * The queue-less gate matters: the notification / 灵动岛
+     * session-activity intent carries no extras at all, so it used
+     * to miss the EXTRA_ATTACH check and fall into a fresh playAt
+     * that raced the live service session — its resolve job was
+     * cancelled by the session adoption and the page stranded on a
+     * dead local player (00:00 / 00:00, inert buttons, a stray
+     * "Job was cancelled" toast) while the service played on
+     * (Torres's recording, 2026-11-17 22:25).
      */
-    private fun tryAttach(): Boolean {
-        if (intent?.getBooleanExtra(EXTRA_ATTACH, false) != true) return false
+    private fun tryAttach(queueLessLaunch: Boolean): Boolean {
+        val explicit = intent?.getBooleanExtra(EXTRA_ATTACH, false) == true
+        if (!explicit && !queueLessLaunch) return false
         val np = NowPlayingState.current() ?: return false
         if (!np.serviceBacked) return false
         val idx = state.queue.indexOfFirst {
@@ -537,6 +587,14 @@ class LxMusicPlayerActivity : BaseActivity() {
                 val message = getString(R.string.music_py_parse_unsupported)
                 state.errorText = message
                 Toast.makeText(this@LxMusicPlayerActivity, message, Toast.LENGTH_SHORT).show()
+            } catch (e: CancellationException) {
+                // Superseded by a newer play / attach / destroy: the
+                // cancellation IS the control flow, not a failure.
+                // The superseding flow owns the page state, so just
+                // rethrow — this catch used to be the generic one
+                // below, which toasted "Job was cancelled" and left
+                // the page pointing at a player that never started.
+                throw e
             } catch (e: Exception) {
                 state.buffering = false
                 val message = e.message ?: getString(R.string.music_resolve_failed)
@@ -1367,6 +1425,109 @@ class LxMusicPlayerActivity : BaseActivity() {
             }
         }
         applyEqMode()
+        ensureVisualizer()
+    }
+
+    /**
+     * Creates (or re-creates, when the session changed) the rhythm
+     * visualizer for the player's current audio session and starts
+     * FFT capture into [LxPlayerState.vizLevels]. Called from
+     * [ensureEffects] so it follows the same lifecycle as the EQ.
+     * Requires RECORD_AUDIO; without the grant it stays off and the
+     * permission callback retries after a grant.
+     */
+    private fun ensureVisualizer() {
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        val sessionId = currentAudioSessionId()
+        if (sessionId <= 0) return
+        if (sessionId == vizSessionId && audioVisualizer != null) return
+        releaseVisualizer()
+        vizSessionId = sessionId
+        try {
+            val viz = Visualizer(sessionId)
+            val captureSize = Visualizer.getCaptureSizeRange()[1]
+            viz.captureSize = captureSize
+            viz.setDataCaptureListener(
+                object : Visualizer.OnDataCaptureListener {
+                    override fun onWaveFormDataCapture(
+                        v: Visualizer?,
+                        data: ByteArray?,
+                        rate: Int,
+                    ) = Unit
+
+                    override fun onFftDataCapture(
+                        v: Visualizer?,
+                        data: ByteArray?,
+                        rate: Int,
+                    ) {
+                        if (data != null) processFft(data)
+                    }
+                },
+                Visualizer.getMaxCaptureRate(),
+                false,
+                true,
+            )
+            viz.enabled = true
+            audioVisualizer = viz
+        } catch (t: Throwable) {
+            audioVisualizer = null
+            vizSessionId = 0
+        }
+    }
+
+    /**
+     * Folds one FFT frame into the smoothed bar levels and publishes
+     * them. FFT bytes come as signed (real, imaginary) pairs per
+     * bin; bins are grouped logarithmically so the bass bars get the
+     * narrow slices they need. Attack is instant, decay is gradual —
+     * that asymmetry is what makes the bars bounce instead of jitter.
+     */
+    private fun processFft(fft: ByteArray) {
+        val bins = fft.size / 2
+        if (bins < VIZ_BARS + 1) return
+        val logMax = Math.log(bins.toDouble())
+        for (bar in 0 until VIZ_BARS) {
+            val lo = Math.exp(logMax * bar / VIZ_BARS).toInt().coerceAtLeast(1)
+            val hi = Math.exp(logMax * (bar + 1) / VIZ_BARS).toInt()
+                .coerceAtLeast(lo + 1)
+                .coerceAtMost(bins)
+            var maxMag = 0f
+            for (k in lo until hi) {
+                val re = fft[2 * k].toFloat()
+                val im = fft[2 * k + 1].toFloat()
+                val mag = Math.sqrt((re * re + im * im).toDouble()).toFloat()
+                if (mag > maxMag) maxMag = mag
+            }
+            val target = (maxMag / 140f).coerceIn(0f, 1f)
+            vizBars[bar] = if (target > vizBars[bar]) {
+                target
+            } else {
+                maxOf(target, vizBars[bar] * 0.78f)
+            }
+        }
+        state.vizLevels = vizBars.copyOf()
+    }
+
+    private fun releaseVisualizer() {
+        try {
+            audioVisualizer?.enabled = false
+        } catch (t: Throwable) {
+        }
+        try {
+            audioVisualizer?.release()
+        } catch (t: Throwable) {
+        }
+        audioVisualizer = null
+        vizSessionId = 0
+        if (state.vizLevels.isNotEmpty()) {
+            state.vizLevels = FloatArray(0)
+        }
     }
 
     /** Applies MusicAppearance.eqMode to the live effects, disabling the rest. */
@@ -1542,6 +1703,7 @@ class LxMusicPlayerActivity : BaseActivity() {
         state.sleepTimerEndAtMs = 0L
         state.sleepMinutesLeft = 0
         releaseEffects()
+        releaseVisualizer()
         // Detach from the service: the service (and its playback)
         // outlives the page, which is the point of the service mode.
         // The shared binding is only un-listened and the queue-owner

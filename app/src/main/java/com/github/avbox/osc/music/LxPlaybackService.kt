@@ -30,6 +30,7 @@ import coil3.request.ImageRequest
 import coil3.target.Target
 import coil3.toBitmap
 import com.github.avbox.osc.R
+import com.github.avbox.osc.util.AppForeground
 
 /**
  * Background playback service for the LX music player (v1.16.0 redesign).
@@ -113,6 +114,38 @@ class LxPlaybackService : Service() {
     private var frameworkSession: MediaSession? = null
     private var foregroundStarted = false
 
+    /**
+     * App foreground/background transitions (v1.20.0): the
+     * background-play pref and the floating mini player both key
+     * off "the app has left the screen entirely".
+     */
+    private val foregroundListener: (Boolean) -> Unit = { foreground ->
+        if (foreground) {
+            FloatingMiniPlayer.sync(this)
+        } else {
+            onAppBackgrounded()
+        }
+    }
+
+    private fun onAppBackgrounded() {
+        if (!MusicPlayPrefs.backgroundPlay) {
+            try {
+                exo?.pause()
+            } catch (t: Throwable) {
+                // Already paused/stopped.
+            }
+            try {
+                val np = NowPlayingState.current()
+                if (np != null && !np.serviceBacked && np.isPlaying) {
+                    NowPlayingState.localControls?.playPause()
+                }
+            } catch (t: Throwable) {
+                // Local controls are best-effort here.
+            }
+        }
+        FloatingMiniPlayer.sync(this)
+    }
+
     /** Cover of the current track: the URL it was loaded from and the bitmap itself. */
     private var artworkUrl: String? = null
     private var artworkBitmap: Bitmap? = null
@@ -154,6 +187,7 @@ class LxPlaybackService : Service() {
                 NowPlayingState.updatePlaying(isPlaying)
             }
             syncSessionAndNotification()
+            FloatingMiniPlayer.sync(this@LxPlaybackService)
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -178,6 +212,7 @@ class LxPlaybackService : Service() {
                 ),
             )
             syncSessionAndNotification()
+            FloatingMiniPlayer.sync(this@LxPlaybackService)
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -248,6 +283,8 @@ class LxPlaybackService : Service() {
         session.setSessionActivity(sessionActivityIntent())
         session.isActive = true
         frameworkSession = session
+        AppForeground.addListener(foregroundListener)
+        FloatingMiniPlayer.sync(this)
         syncSessionAndNotification()
         // Promote to foreground right away with the initial minimal
         // notification; later updates go through notify once this has
@@ -304,6 +341,8 @@ class LxPlaybackService : Service() {
 
     override fun onDestroy() {
         MusicCrashLog.log(this, "svc2: service onDestroy")
+        AppForeground.removeListener(foregroundListener)
+        FloatingMiniPlayer.hide(this)
         // The service dying ends service playback: its mini-bar record
         // must not outlive it (a local record belongs to the Activity).
         if (NowPlayingState.current()?.serviceBacked == true) {

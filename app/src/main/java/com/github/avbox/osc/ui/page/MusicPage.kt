@@ -5,10 +5,17 @@
 
 package com.github.avbox.osc.ui.page
 
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.ImageDecoder
 import android.graphics.drawable.AnimatedImageDrawable
 import android.os.Build
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.util.Base64
 import android.widget.ImageView
 import android.widget.Toast
@@ -60,17 +67,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -88,6 +102,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -105,6 +120,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.Player
@@ -164,6 +180,7 @@ fun MusicPage(
     val pyDetailLoading by vm.pyDetailLoading.collectAsStateWithLifecycle()
     val pendingPyPlay by vm.pendingPyPlay.collectAsStateWithLifecycle()
     val episodePage by vm.episodePage.collectAsStateWithLifecycle()
+    val recognizeState by vm.recognizeState.collectAsStateWithLifecycle()
 
     var query by rememberSaveable { mutableStateOf("") }
     var scriptDialogOpen by remember { mutableStateOf(false) }
@@ -212,6 +229,184 @@ fun MusicPage(
             if (message.isNotEmpty()) {
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    // Recognition results land in the search field (v1.20.0), and a
+    // JS-mode recognition hit asks the page to open the player on
+    // the matched result.
+    LaunchedEffect(vm) {
+        vm.queryEvents.collect { query = it }
+    }
+
+    LaunchedEffect(vm) {
+        vm.playRequests.collect { (queue, index) ->
+            LxMusicPlayerActivity.start(
+                context,
+                MusicTrack.listToJson(queue),
+                index,
+            )
+        }
+    }
+
+    // One search trigger for the IME action and voice results:
+    // spider mode searches the spider; native mode switches to the
+    // search content first (v1.19.1's model).
+    fun submitSearch() {
+        if (pyActive) {
+            vm.pySearch(query)
+        } else {
+            if (mode != MusicMode.SEARCH) {
+                vm.selectMode(MusicMode.SEARCH)
+            }
+            vm.search(query)
+        }
+    }
+
+    // ------------------------------------------------------ voice (v1.20.0)
+    // The search field's leading magnifier became a microphone
+    // (Torres): tapping it dictates the query through the system's
+    // speech recogniser, partial results stream into the field and
+    // the final result submits the search. Devices without a
+    // recognition service fall back to the system speech UI, and
+    // devices with neither get a toast — never a dead button.
+
+    var voiceListening by remember { mutableStateOf(false) }
+    val voiceErrorText = stringResource(R.string.music_voice_error)
+    val voiceUnavailableText = stringResource(R.string.music_voice_unavailable)
+    val micPermissionText = stringResource(R.string.music_mic_permission_needed)
+
+    val speechRecognizer = remember {
+        if (SpeechRecognizer.isRecognitionAvailable(context)) {
+            SpeechRecognizer.createSpeechRecognizer(context)
+        } else {
+            null
+        }
+    }
+
+    DisposableEffect(speechRecognizer) {
+        val recognizer = speechRecognizer
+        recognizer?.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) = Unit
+            override fun onBeginningOfSpeech() = Unit
+            override fun onRmsChanged(rmsdB: Float) = Unit
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+            override fun onEndOfSpeech() = Unit
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+
+            override fun onError(error: Int) {
+                voiceListening = false
+                if (error != SpeechRecognizer.ERROR_CLIENT) {
+                    Toast.makeText(context, voiceErrorText, Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            override fun onResults(results: Bundle?) {
+                voiceListening = false
+                val text = results
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                    .orEmpty()
+                if (text.isNotBlank()) {
+                    query = text
+                    submitSearch()
+                }
+            }
+
+            override fun onPartialResults(partialResults: Bundle?) {
+                val text = partialResults
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                if (!text.isNullOrBlank()) {
+                    query = text
+                }
+            }
+        })
+        onDispose { recognizer?.destroy() }
+    }
+
+    val voiceIntentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val text = result.data
+            ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            ?.firstOrNull()
+        if (!text.isNullOrBlank()) {
+            query = text
+            submitSearch()
+        }
+    }
+
+    fun startVoiceSearch() {
+        val recognizer = speechRecognizer
+        if (recognizer == null) {
+            try {
+                voiceIntentLauncher.launch(
+                    Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        putExtra(
+                            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                        )
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+                    },
+                )
+            } catch (t: Throwable) {
+                Toast.makeText(context, voiceUnavailableText, Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        }
+        try {
+            voiceListening = true
+            recognizer.startListening(intent)
+        } catch (t: Throwable) {
+            voiceListening = false
+            Toast.makeText(context, voiceErrorText, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // One microphone-permission gate shared by voice search and the
+    // radar: the pending action runs when the grant comes back.
+    var pendingMicAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val action = pendingMicAction
+        pendingMicAction = null
+        if (granted) {
+            action?.invoke()
+        } else {
+            Toast.makeText(context, micPermissionText, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun withMicPermission(action: () -> Unit) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO,
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            action()
+        } else {
+            pendingMicAction = action
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    // Radar tap: no keys yet → the key dialog; keys on file → the
+    // permission gate → the ViewModel's capture/identify flow.
+    fun onRadarClick() {
+        if (!vm.acrHasKeys()) {
+            vm.requestRecognizeKeys()
+        } else {
+            withMicPermission { vm.startRecognize() }
         }
     }
 
@@ -327,18 +522,18 @@ fun MusicPage(
                 MusicSearchField(
                     query = query,
                     onQueryChange = { query = it },
-                    onSearch = {
-                        if (pyActive) {
-                            vm.pySearch(query)
-                        } else {
-                            if (mode != MusicMode.SEARCH) {
-                                vm.selectMode(MusicMode.SEARCH)
-                            }
-                            vm.search(query)
-                        }
-                    },
+                    onSearch = { submitSearch() },
+                    onVoiceClick = { withMicPermission { startVoiceSearch() } },
+                    voiceListening = voiceListening,
                     modifier = Modifier.weight(1f),
                 )
+                // Radar 听歌识曲 (v1.20.0): sits between the search
+                // field and the multi-function ball's seat; the seat
+                // spacer stays last in the row, so the ball overlay's
+                // anchor math is unchanged.
+                TopRoundButton(onClick = { onRadarClick() }) {
+                    RadarGlyph()
+                }
                 // The multi-function ball's seat: a 48dp spacer at
                 // the row's right end (8dp spacing like the other
                 // gaps). MusicMultiFab draws the ball itself over
@@ -832,6 +1027,108 @@ fun MusicPage(
             dismissButton = {
                 TextButton(onClick = { scriptDialogOpen = false }) {
                     Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+
+    // 听歌识曲 key entry (v1.20.0): shown when the radar is tapped
+    // before any ACRCloud keys are stored. The keys belong to
+    // Torres's own ACRCloud project and persist in KV via the
+    // ViewModel; saving closes the dialog and starts the capture
+    // straight away (through the same permission gate as the radar).
+    if (recognizeState.phase == RecognizePhase.NEED_KEYS) {
+        val stored = remember { vm.acrKeys() }
+        var acrHost by remember { mutableStateOf(stored.host) }
+        var acrKey by remember { mutableStateOf(stored.accessKey) }
+        var acrSecret by remember { mutableStateOf(stored.accessSecret) }
+        AVBoxAlertDialog(
+            onDismissRequest = { vm.dismissRecognize() },
+            title = { Text(stringResource(R.string.music_recognize)) },
+            text = {
+                Column {
+                    Text(
+                        text = stringResource(R.string.music_acr_keys_intro),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = acrHost,
+                        onValueChange = { acrHost = it },
+                        label = { Text(stringResource(R.string.music_acr_host_hint)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = acrKey,
+                        onValueChange = { acrKey = it },
+                        label = { Text(stringResource(R.string.music_acr_key_hint)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = acrSecret,
+                        onValueChange = { acrSecret = it },
+                        label = { Text(stringResource(R.string.music_acr_secret_hint)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.saveAcrKeys(acrHost, acrKey, acrSecret)
+                        withMicPermission { vm.startRecognize() }
+                    },
+                ) {
+                    Text(stringResource(R.string.common_save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.dismissRecognize() }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            },
+        )
+    }
+
+    // 听歌识曲 in progress: a pulsing radar while the microphone
+    // captures, then a plain "identifying" state for the round-trip.
+    // Dismissing (or the cancel button) aborts the capture.
+    if (recognizeState.phase == RecognizePhase.LISTENING ||
+        recognizeState.phase == RecognizePhase.IDENTIFYING
+    ) {
+        val listening = recognizeState.phase == RecognizePhase.LISTENING
+        AVBoxAlertDialog(
+            onDismissRequest = { vm.cancelRecognize() },
+            title = { Text(stringResource(R.string.music_recognize)) },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    RadarPulse()
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = if (listening) {
+                            stringResource(
+                                R.string.music_recognize_listening,
+                                recognizeState.secondsLeft,
+                            )
+                        } else {
+                            stringResource(R.string.music_recognize_identifying)
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.cancelRecognize() }) {
+                    Text(stringResource(android.R.string.cancel))
                 }
             },
         )
@@ -1742,6 +2039,64 @@ private fun VinylCanvasDisc(playing: Boolean) {
 }
 
 /**
+ * The radar glyph of the 听歌识曲 button (v1.20.0), self-drawn like
+ * the vinyl disc: a centre dot with three radiating arcs. No stock
+ * material icon reads as "radar" at 20dp, and a drawn glyph cannot
+ * go missing from an icons-library version.
+ */
+@Composable
+private fun RadarGlyph() {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    Canvas(modifier = Modifier.size(20.dp)) {
+        val c = center
+        val maxR = size.minDimension / 2f
+        drawCircle(color = color, radius = 2.2.dp.toPx(), center = c)
+        for (fraction in listOf(0.48f, 0.74f, 1f)) {
+            val r = maxR * fraction
+            drawArc(
+                color = color,
+                startAngle = -55f,
+                sweepAngle = 110f,
+                useCenter = false,
+                style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round),
+                topLeft = Offset(c.x - r, c.y - r),
+                size = Size(r * 2f, r * 2f),
+            )
+        }
+    }
+}
+
+/** Expanding radar rings shown while 听歌识曲 listens / identifies. */
+@Composable
+private fun RadarPulse() {
+    val transition = rememberInfiniteTransition(label = "radar")
+    val progress by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "radarPulse",
+    )
+    val color = MaterialTheme.colorScheme.primary
+    Canvas(modifier = Modifier.size(72.dp)) {
+        val c = center
+        val maxR = size.minDimension / 2f
+        for (i in 0..1) {
+            val p = (progress + i * 0.5f) % 1f
+            drawCircle(
+                color = color.copy(alpha = (1f - p) * 0.5f),
+                radius = maxR * p,
+                center = c,
+                style = Stroke(width = 2.dp.toPx()),
+            )
+        }
+        drawCircle(color = color, radius = 5.dp.toPx(), center = c)
+    }
+}
+
+/**
  * Self-drawn pill search field. The previous OutlinedTextField with a fixed
  * 44dp height clipped its text vertically on real devices, so the pill is a
  * bordered Surface whose content is centered by the Row instead.
@@ -1751,6 +2106,8 @@ private fun MusicSearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
+    onVoiceClick: () -> Unit,
+    voiceListening: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -1769,13 +2126,26 @@ private fun MusicSearchField(
             modifier = Modifier.padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = Icons.Filled.Search,
-                contentDescription = stringResource(R.string.music_search_action),
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.width(8.dp))
+            // The leading magnifier became a microphone (v1.20.0,
+            // Torres): tapping it dictates the search instead of
+            // typing. While the recogniser listens it takes the
+            // primary colour so the state is visible at a glance.
+            IconButton(
+                onClick = onVoiceClick,
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Mic,
+                    contentDescription = stringResource(R.string.music_voice_search),
+                    modifier = Modifier.size(19.dp),
+                    tint = if (voiceListening) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+            Spacer(Modifier.width(4.dp))
             BasicTextField(
                 value = query,
                 onValueChange = onQueryChange,

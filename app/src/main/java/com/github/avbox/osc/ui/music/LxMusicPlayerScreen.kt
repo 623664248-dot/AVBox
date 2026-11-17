@@ -5,7 +5,11 @@
 
 package com.github.avbox.osc.ui.music
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -48,14 +52,23 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -65,6 +78,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import coil3.compose.AsyncImage
 import com.github.avbox.osc.R
+import com.github.avbox.osc.music.MusicTrack
 import com.github.avbox.osc.ui.components.AVBoxOptionSheet
 
 /** Background when no cover colour has been sampled yet: deep blue-grey. */
@@ -176,9 +190,12 @@ fun LxMusicPlayerScreen(
             }
         }
 
-        // Big square cover; tapping it (or the lyric lines) opens the
-        // immersive lyrics. The square takes whatever room is left
+        // Big cover area; the square takes whatever room is left
         // between the fixed rows, capped by the narrower dimension.
+        // Tapping it cycles the cover display style — 专辑图 →
+        // 黑胶唱片 → 唱机 — persisted in MusicAppearance (v1.20.0,
+        // Torres's reference player); the immersive lyrics still
+        // open from the lyric lines below, as before.
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
@@ -187,30 +204,41 @@ fun LxMusicPlayerScreen(
             contentAlignment = Alignment.Center,
         ) {
             val side = minOf(maxWidth, maxHeight)
+            val context = LocalContext.current
             Box(
                 modifier = Modifier
                     .size(side)
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable { immersive = true },
+                    .clickable {
+                        val next = MusicAppearance.cycleCoverStyle()
+                        val nameRes = when (next) {
+                            MusicAppearance.COVER_VINYL ->
+                                R.string.music_cover_style_vinyl
+                            MusicAppearance.COVER_TURNTABLE ->
+                                R.string.music_cover_style_turntable
+                            else -> R.string.music_cover_style_album
+                        }
+                        Toast.makeText(context, nameRes, Toast.LENGTH_SHORT).show()
+                    },
                 contentAlignment = Alignment.Center,
             ) {
-                if (track?.img != null) {
-                    AsyncImage(
-                        model = track.img,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
+                when (MusicAppearance.coverStyle) {
+                    MusicAppearance.COVER_VINYL -> VinylCoverArt(
+                        track = track,
+                        playing = state.playing,
+                        buffering = state.buffering,
                         modifier = Modifier.fillMaxSize(),
                     )
-                } else {
-                    Icon(
-                        imageVector = Icons.Filled.MusicNote,
-                        contentDescription = null,
-                        modifier = Modifier.size(96.dp),
-                        tint = Color.White.copy(alpha = 0.7f),
+                    MusicAppearance.COVER_TURNTABLE -> TurntableCoverArt(
+                        track = track,
+                        playing = state.playing,
+                        buffering = state.buffering,
+                        modifier = Modifier.fillMaxSize(),
                     )
-                }
-                if (state.buffering) {
-                    CircularProgressIndicator(color = Color.White)
+                    else -> AlbumCoverArt(
+                        track = track,
+                        buffering = state.buffering,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
             }
         }
@@ -350,6 +378,16 @@ fun LxMusicPlayerScreen(
                     }
                 }
             }
+        }
+
+        // Rhythm visualizer (v1.20.0): FFT bars fed by the activity's
+        // Visualizer, bouncing with the music above the progress bar
+        // like Torres's reference player. Renders nothing until the
+        // first frame lands, so without the microphone permission
+        // (or on a device without audiofx) the page is as before.
+        if (state.vizLevels.isNotEmpty()) {
+            RhythmBars(levels = state.vizLevels)
+            Spacer(Modifier.height(4.dp))
         }
 
         ProgressRow(state = state, onSeek = onSeek)
@@ -591,6 +629,284 @@ private fun TwoLineLyrics(
                 .fillMaxWidth()
                 .padding(top = 6.dp),
         )
+    }
+}
+
+/**
+ * Rhythm visualizer bars (v1.20.0): rounded vertical bars mirrored
+ * around the centre line, heights from [LxPlayerState.vizLevels] —
+ * the FFT levels the activity's Visualizer publishes at capture
+ * rate. Sits above the progress bar, like the reference player.
+ */
+@Composable
+private fun RhythmBars(levels: FloatArray) {
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(34.dp)
+            .padding(horizontal = 20.dp),
+    ) {
+        if (levels.isEmpty()) return@Canvas
+        val gap = 3.dp.toPx()
+        val barWidth = (size.width - gap * (levels.size - 1)) / levels.size
+        val midY = size.height / 2f
+        val maxHalf = size.height / 2f - 1.dp.toPx()
+        for (i in levels.indices) {
+            val half = (levels[i].coerceIn(0f, 1f) * maxHalf)
+                .coerceAtLeast(1.2.dp.toPx())
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.8f),
+                topLeft = Offset(i * (barWidth + gap), midY - half),
+                size = Size(barWidth, half * 2f),
+                cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f),
+            )
+        }
+    }
+}
+
+/** Cover style 专辑图 (v1.20.0): the original square album art. */
+@Composable
+private fun AlbumCoverArt(
+    track: MusicTrack?,
+    buffering: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.clip(RoundedCornerShape(16.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (track?.img != null) {
+            AsyncImage(
+                model = track.img,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Filled.MusicNote,
+                contentDescription = null,
+                modifier = Modifier.size(96.dp),
+                tint = Color.White.copy(alpha = 0.7f),
+            )
+        }
+        if (buffering) {
+            CircularProgressIndicator(color = Color.White)
+        }
+    }
+}
+
+/**
+ * A vinyl record: black disc with groove rings and a light arc, the
+ * song's cover as the centre label, rotating while playing. The
+ * spin rate eases toward its target (one turn per 12 s playing,
+ * stopped paused) instead of snapping, like a real record changing
+ * speed — the same feel as the music page's source-button vinyl.
+ */
+@Composable
+private fun VinylDisc(
+    track: MusicTrack?,
+    playing: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var rotation by remember { mutableStateOf(0f) }
+    val playingNow = rememberUpdatedState(playing)
+    LaunchedEffect(Unit) {
+        val playingRate = 360f / 12_000f
+        val slopePerMs = playingRate / 600f
+        var rate = 0f
+        var lastFrameMs = -1L
+        while (true) {
+            withFrameMillis { frameMs ->
+                if (lastFrameMs >= 0L) {
+                    val dtMs = (frameMs - lastFrameMs).toFloat()
+                    val target = if (playingNow.value) playingRate else 0f
+                    val maxStep = slopePerMs * dtMs
+                    rate += (target - rate).coerceIn(-maxStep, maxStep)
+                    rotation = (rotation + dtMs * rate) % 360f
+                }
+                lastFrameMs = frameMs
+            }
+        }
+    }
+    Box(
+        modifier = modifier
+            .graphicsLayer { rotationZ = rotation }
+            .clip(CircleShape)
+            .background(Color(0xFF101114)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val c = center
+            val r = size.minDimension / 2f
+            for (fraction in listOf(0.92f, 0.82f, 0.72f, 0.62f)) {
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.08f),
+                    radius = r * fraction,
+                    center = c,
+                    style = Stroke(width = 1.dp.toPx()),
+                )
+            }
+            drawArc(
+                color = Color.White.copy(alpha = 0.28f),
+                startAngle = -40f,
+                sweepAngle = 70f,
+                useCenter = false,
+                style = Stroke(width = 2.dp.toPx()),
+                topLeft = Offset(c.x - r * 0.92f, c.y - r * 0.92f),
+                size = Size(r * 1.84f, r * 1.84f),
+            )
+        }
+        if (track?.img != null) {
+            AsyncImage(
+                model = track.img,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize(0.52f)
+                    .clip(CircleShape),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize(0.52f)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.MusicNote,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(40.dp),
+                )
+            }
+        }
+        // Spindle hole.
+        Box(
+            modifier = Modifier
+                .size(9.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF050506)),
+        )
+    }
+}
+
+/**
+ * The tonearm overlay of the vinyl / turntable styles: a silver arm
+ * on a pivot at the top right. Playing swings the needle end onto
+ * the record; pausing swings it back to rest (animated).
+ */
+@Composable
+private fun Tonearm(
+    playing: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val angle by animateFloatAsState(
+        targetValue = if (playing) 26f else 4f,
+        animationSpec = tween(durationMillis = 700),
+        label = "tonearm",
+    )
+    Canvas(modifier = modifier) {
+        val pivot = Offset(size.width * 0.80f, size.height * 0.13f)
+        val armLength = size.height * 0.72f
+        drawCircle(
+            color = Color(0xFF3A3B40),
+            radius = 13.dp.toPx(),
+            center = pivot,
+        )
+        drawCircle(
+            color = Color(0xFFB9BBC2),
+            radius = 7.dp.toPx(),
+            center = pivot,
+        )
+        rotate(degrees = angle, pivot = pivot) {
+            drawLine(
+                color = Color(0xFFD7D8DC),
+                start = pivot,
+                end = Offset(pivot.x, pivot.y + armLength),
+                strokeWidth = 4.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+            drawRoundRect(
+                color = Color(0xFF26272C),
+                topLeft = Offset(
+                    pivot.x - 5.dp.toPx(),
+                    pivot.y + armLength - 2.dp.toPx(),
+                ),
+                size = Size(10.dp.toPx(), 20.dp.toPx()),
+                cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
+            )
+        }
+    }
+}
+
+/** Cover style 黑胶唱片 (v1.20.0): the vinyl disc plus its tonearm. */
+@Composable
+private fun VinylCoverArt(
+    track: MusicTrack?,
+    playing: Boolean,
+    buffering: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        VinylDisc(
+            track = track,
+            playing = playing,
+            modifier = Modifier.fillMaxSize(),
+        )
+        Tonearm(playing = playing, modifier = Modifier.fillMaxSize())
+        if (buffering) {
+            CircularProgressIndicator(color = Color.White)
+        }
+    }
+}
+
+/**
+ * Cover style 唱机 (v1.20.0): a light turntable platter holding the
+ * vinyl disc, with the tonearm over it and the reference deck's
+ * left-edge details (green power dot over a slim slider).
+ */
+@Composable
+private fun TurntableCoverArt(
+    track: MusicTrack?,
+    playing: Boolean,
+    buffering: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFFE9E6E0)),
+        contentAlignment = Alignment.Center,
+    ) {
+        VinylDisc(
+            track = track,
+            playing = playing,
+            modifier = Modifier.fillMaxSize(0.88f),
+        )
+        Tonearm(playing = playing, modifier = Modifier.fillMaxSize())
+        // Left-edge details: the slim slider and the power dot.
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 13.dp)
+                .width(3.dp)
+                .height(58.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Color(0xFFB9B4AA)),
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 11.dp, bottom = 13.dp)
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF3ECF5A)),
+        )
+        if (buffering) {
+            CircularProgressIndicator(color = Color(0xFF444444))
+        }
     }
 }
 

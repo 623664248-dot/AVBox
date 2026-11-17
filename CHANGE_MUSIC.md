@@ -1743,3 +1743,55 @@ Torres 两点要求：① 左上角音源（黑胶）按钮加长按刷新站点
     出胶囊，点即 playEpisode(0)；单曲的 24bit/16bit 两行不显示。
   - 榜单详情：原图标+文字行换成同一胶囊，行为不变
     （onPlaySong(0)）。
+
+# v1.20.0 语音搜歌 / 听歌识曲 / 节奏器 / 封面三样式 / 后台播放开关 / 圆形迷你播放器
+
+## 做了什么
+
+- **语音搜歌**：音乐页搜索栏左侧的搜索图标换成话筒。点话筒走系统
+  语音识别（SpeechRecognizer，partial 结果实时填入搜索框），识别
+  完成自动按关键词搜索（py 模式走 pySearch，脚本模式走普通搜索）。
+  无系统识别服务时回退 ACTION_RECOGNIZE_SPEECH；新增 RECORD_AUDIO
+  权限（话筒、识曲、节奏器共用）。
+- **听歌识曲**：搜索栏右侧加自绘雷达按钮。点按后录音 10 秒
+  （SongRecognizer：AudioRecord 16kHz 单声道 → WAV），POST 到
+  ACRCloud `/v1/identify`（HMAC-SHA1 签名，multipart）。密钥
+  （Host / Access Key / Access Secret）由用户在首次点按的弹窗里
+  填一次，存 KV（lx_acr_*），不经聊天与代码。识别命中后：脚本模式
+  自动搜索并播第一首标题命中的歌；py 模式展示该源的搜索结果。
+  识别中弹窗带倒计时与雷达脉冲动画，可取消。
+- **节奏器**：播放页进度条上方加 FFT 柱状条（28 根，Visualizer
+  取播放器 audio session 的 FFT，对数分频 + 快起慢落平滑，镜像
+  中线绘制）。无录音权限时自动申请一次；取不到 session 时整条
+  不显示，不影响播放。
+- **封面更换**：点播放页封面循环三样式——专辑图（原方形封面）→
+  黑胶唱片（旋转唱片 + 唱针，播放时转、暂停停针摆出）→ 唱机
+  （浅色转盘 + 唱针 + 电源灯）。样式存 KV（music_cover_style）。
+  注意：点封面不再进沉浸歌词，沉浸歌词改由点歌词行进入。
+- **修复：灵动岛/通知点进播放页不同步**。根因：MediaSession 的
+  sessionActivity 是裸 Intent（无 EXTRA_ATTACH、无队列），播放页
+  按全新启动走 playAt，其解析任务又被随后的会话接管取消，还把
+  CancellationException 的 "Job was cancelled" 当错误 toast 弹出，
+  页面停在 00:00 且按钮失效。修法：无队列启动（queue-less）且
+  NowPlayingState 有本服务记录时同样走 attach 接管现有播放；
+  playAt 的解析对 CancellationException 直接上抛，不再弹 toast、
+  不再留下假状态。
+- **后台播放开关**（外观面板新增「播放」区，默认开）：开 = 现有
+  行为（离开应用继续播；播放器内核的音频焦点本来就处理来电/
+  语音消息的暂停与恢复）。关 = 应用整体离开屏幕（AppForeground
+  计数归零）即暂停服务与本地两种播放。回前台不自动恢复。
+- **圆形迷你播放器**（同区开关，默认关，需悬浮窗权限）：开启后
+  离开应用且有歌在播时，屏幕上出现 58dp 悬浮圆盘（封面、旋转、
+  角标播放/暂停），盖在其他应用之上；拖动移位（位置记忆），
+  点按暂停/播放。由 LxPlaybackService 托管（FloatingMiniPlayer），
+  回到应用内自动隐藏（应用内有 mini 条）。首次开启无权限时跳
+  系统悬浮窗设置页。
+
+## 新增文件
+
+| 文件 | 作用 |
+| --- | --- |
+| `music/SongRecognizer.kt` | ACRCloud 识曲：录音 WAV + 签名 + 识别请求 |
+| `music/MusicPlayPrefs.kt` | 后台播放 / 圆形迷你播放器两个开关（KV） |
+| `music/FloatingMiniPlayer.kt` | 悬浮圆盘（WindowManager overlay，服务托管） |
+| `util/AppForeground.kt` | 进程级前后台跟踪（Application 注册计数） |

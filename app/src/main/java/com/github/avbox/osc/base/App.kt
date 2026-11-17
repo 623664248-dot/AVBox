@@ -16,6 +16,7 @@ import com.github.avbox.osc.net.HttpClients
 import com.github.avbox.osc.server.ControlManager
 import com.github.avbox.osc.util.AppContextHolder
 import com.github.avbox.osc.util.ActivityStack
+import com.github.avbox.osc.util.AppForeground
 import com.github.avbox.osc.util.EpgUtil
 import com.github.avbox.osc.util.KVKeys
 import com.github.avbox.osc.util.KV
@@ -51,6 +52,7 @@ class App : Application() {
         bootMark("installStrictMode")
         instance = this
         AppContextHolder.install(this)
+        AppForeground.install(this)
         BootGuard.install()
         bootMark("bootGuard")
         initParams()

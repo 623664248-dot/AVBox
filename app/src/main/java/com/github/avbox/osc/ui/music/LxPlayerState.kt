@@ -102,6 +102,14 @@ class LxPlayerState {
     /** Whole minutes left on the sleep timer, refreshed by the ticker. */
     var sleepMinutesLeft by mutableIntStateOf(0)
 
+    /**
+     * Rhythm-visualizer bar levels (0f..1f) for the player page
+     * (v1.20.0), published by the activity's Visualizer at capture
+     * rate. Empty until the first FFT frame lands; replaced (never
+     * mutated) per frame so Compose sees every update.
+     */
+    var vizLevels by mutableStateOf<FloatArray>(FloatArray(0))
+
     var downloadStatus by mutableStateOf(LxDownloadStatus.IDLE)
 
     /** 0..100 while downloading; -1 when the total size is unknown. */

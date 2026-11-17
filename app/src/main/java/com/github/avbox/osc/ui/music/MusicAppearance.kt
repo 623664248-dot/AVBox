@@ -3,7 +3,9 @@
 package com.github.avbox.osc.ui.music
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -20,12 +22,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -39,6 +43,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.github.avbox.osc.R
+import com.github.avbox.osc.music.MusicPlayPrefs
 import com.github.avbox.osc.ui.components.AVBoxBottomSheet
 import com.github.avbox.osc.util.KV
 import java.io.File
@@ -64,6 +69,12 @@ object MusicAppearance {
     private const val KEY_SCRIM_PERCENT = "music_bg_scrim_percent"
     private const val KEY_EQ_MODE = "music_eq_mode"
     private const val KEY_EQ_CUSTOM_LEVELS = "music_eq_custom_levels"
+    private const val KEY_COVER_STYLE = "music_cover_style"
+
+    /** Player-page cover styles (v1.20.0), cycled by tapping the cover. */
+    const val COVER_ALBUM = 0
+    const val COVER_VINYL = 1
+    const val COVER_TURNTABLE = 2
 
     private const val BG_DIR_NAME = "music_bg"
 
@@ -99,6 +110,19 @@ object MusicAppearance {
 
     var eqMode by mutableStateOf(readString(KEY_EQ_MODE).ifBlank { EQ_OFF })
         private set
+
+    var coverStyle by mutableIntStateOf(
+        readInt(KEY_COVER_STYLE, COVER_ALBUM).coerceIn(COVER_ALBUM, COVER_TURNTABLE),
+    )
+        private set
+
+    /** Advances to the next cover style and persists it. */
+    fun cycleCoverStyle(): Int {
+        val next = (coverStyle + 1) % (COVER_TURNTABLE + 1)
+        coverStyle = next
+        KV.put(KEY_COVER_STYLE, next.toString())
+        return next
+    }
 
     private fun readString(key: String): String = KV.get(key, "")
 
@@ -415,6 +439,56 @@ fun MusicAppearanceSheet(
                     }
                 }
             }
+
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = stringResource(R.string.music_playback_section),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            var backgroundPlay by remember { mutableStateOf(MusicPlayPrefs.backgroundPlay) }
+            PlaybackToggleRow(
+                title = stringResource(R.string.music_background_play),
+                desc = stringResource(
+                    if (backgroundPlay) {
+                        R.string.music_background_play_on
+                    } else {
+                        R.string.music_background_play_off
+                    },
+                ),
+                checked = backgroundPlay,
+                onCheckedChange = {
+                    backgroundPlay = it
+                    MusicPlayPrefs.backgroundPlay = it
+                },
+            )
+            var floatingMini by remember { mutableStateOf(MusicPlayPrefs.floatingMiniPlayer) }
+            val overlayHintMsg = stringResource(R.string.music_floating_mini_permission)
+            PlaybackToggleRow(
+                title = stringResource(R.string.music_floating_mini),
+                desc = stringResource(R.string.music_floating_mini_desc),
+                checked = floatingMini,
+                onCheckedChange = { enabled ->
+                    floatingMini = enabled
+                    MusicPlayPrefs.floatingMiniPlayer = enabled
+                    if (enabled && !Settings.canDrawOverlays(context)) {
+                        // The pref stays on; the disc appears once the
+                        // system grants the overlay permission, so send
+                        // him straight to its settings page.
+                        Toast.makeText(context, overlayHintMsg, Toast.LENGTH_LONG).show()
+                        try {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:" + context.packageName),
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        } catch (t: Throwable) {
+                            // No settings page to open on this ROM.
+                        }
+                    }
+                },
+            )
         }
     }
 }
@@ -429,6 +503,35 @@ private fun formatEqDb(levelMb: Int): String {
     val db = levelMb / 100f
     val sign = if (db > 0f) "+" else ""
     return sign + String.format(java.util.Locale.US, "%.1f", db) + " dB"
+}
+
+/** One switch row of the playback section (title + state description). */
+@Composable
+private fun PlaybackToggleRow(
+    title: String,
+    desc: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                text = desc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
 }
 
 @Composable
