@@ -126,6 +126,8 @@ fun LxMusicPlayerScreen(
     onClearQueue: () -> Unit = {},
     onPlayPlaylist: (List<MusicTrack>) -> Unit = {},
     onDownloadQueue: () -> Unit = {},
+    onRemoveQueueItems: (Set<Int>) -> Unit = {},
+    onDownloadQueueItems: (Set<Int>) -> Unit = {},
     onToggleFavorite: () -> Unit = {},
     onDownload: () -> Unit = {},
     onMuteToggle: () -> Unit = {},
@@ -599,6 +601,8 @@ fun LxMusicPlayerScreen(
             onClear = onClearQueue,
             onPlayPlaylist = onPlayPlaylist,
             onDownloadQueue = onDownloadQueue,
+            onRemoveItems = onRemoveQueueItems,
+            onDownloadItems = onDownloadQueueItems,
         )
     }
 }
@@ -1440,7 +1444,44 @@ private fun QueueTab(
  * is removed (Torres: tapping it did nothing — it was
  * long-press-only, and he does not reorder), and the playing
  * row takes QQ's accent green.
+ * v1.34.0: a multi-select mode (Torres's recording showed the
+ * toolbar could only download ALL 147 songs or clear all but
+ * one): the toolbar gains a 多选 entry; in select mode each
+ * row carries a checkbox, the toolbar becomes
+ * 取消 / 已选 N / 全选 / 下载 / 删除， and the actions apply
+ * to the checked rows only — download + delete on the
+ * 正在播放 and 已播歌曲 tabs, delete on the 歌单 tab
+ * (checked playlists). Switching tabs clears the checks.
  */
+
+/** One row's selection circle in the queue dialog's select mode. */
+@Composable
+private fun QueueCheckBox(checked: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(22.dp)
+            .background(
+                if (checked) {
+                    QueueAccentGreen
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                        .copy(alpha = 0.18f)
+                },
+                CircleShape,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (checked) {
+            Icon(
+                painter = painterResource(R.drawable.ic_check),
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = Color.White,
+            )
+        }
+    }
+}
+
 @Composable
 private fun QueueDialog(
     state: LxPlayerState,
@@ -1451,10 +1492,27 @@ private fun QueueDialog(
     onClear: () -> Unit,
     onPlayPlaylist: (List<MusicTrack>) -> Unit,
     onDownloadQueue: () -> Unit,
+    onRemoveItems: (Set<Int>) -> Unit,
+    onDownloadItems: (Set<Int>) -> Unit,
 ) {
     val listState = rememberLazyListState()
     var tab by remember { mutableStateOf(0) }
+    var selectMode by remember { mutableStateOf(false) }
+    var selected by remember {
+        mutableStateOf<Set<Int>>(emptySet())
+    }
+    var selectedPlaylists by remember {
+        mutableStateOf<Set<String>>(emptySet())
+    }
+    var showDownloadSelectedConfirm by remember {
+        mutableStateOf(false)
+    }
+    var showDeleteSelectedConfirm by remember {
+        mutableStateOf(false)
+    }
     LaunchedEffect(tab) {
+        selected = emptySet()
+        selectedPlaylists = emptySet()
         if (tab == 0) {
             if (state.index > 0) listState.scrollToItem(state.index)
         } else {
@@ -1468,6 +1526,24 @@ private fun QueueDialog(
     var showCreate by remember { mutableStateOf(false) }
     var showDownloadConfirm by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
+    val playedIndices = (state.index - 1 downTo 0).toList()
+    val tabIndices: List<Int> = when (tab) {
+        0 -> state.queue.indices.toList()
+        1 -> playedIndices
+        else -> emptyList()
+    }
+    val selectedCount = if (tab == 2) {
+        selectedPlaylists.size
+    } else {
+        selected.size
+    }
+    val allSelected = if (tab == 2) {
+        playlists.isNotEmpty() &&
+            selectedPlaylists.size >= playlists.size
+    } else {
+        tabIndices.isNotEmpty() &&
+            selected.containsAll(tabIndices)
+    }
     val primary = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
     val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1522,6 +1598,103 @@ private fun QueueDialog(
                         onClick = { tab = 2 },
                     )
                 }
+                if (selectMode) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        onClick = {
+                            selectMode = false
+                            selected = emptySet()
+                            selectedPlaylists = emptySet()
+                        },
+                    ) {
+                        Text(
+                            text = stringResource(
+                                R.string.common_cancel,
+                            ),
+                        )
+                    }
+                    Text(
+                        text = stringResource(
+                            if (tab == 2) {
+                                R.string
+                                    .music_queue_selected_playlist_count
+                            } else {
+                                R.string.music_queue_selected_count
+                            },
+                            selectedCount,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = onSurfaceVariant,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    TextButton(
+                        onClick = {
+                            if (allSelected) {
+                                selected = emptySet()
+                                selectedPlaylists = emptySet()
+                            } else if (tab == 2) {
+                                selectedPlaylists =
+                                    playlists.map { it.name }.toSet()
+                            } else {
+                                selected = tabIndices.toSet()
+                            }
+                        },
+                    ) {
+                        Text(
+                            text = stringResource(
+                                R.string.common_select_all,
+                            ),
+                        )
+                    }
+                    if (tab != 2) {
+                        IconButton(
+                            onClick = {
+                                if (selected.isNotEmpty()) {
+                                    showDownloadSelectedConfirm = true
+                                }
+                            },
+                        ) {
+                            Icon(
+                                painter = painterResource(
+                                    R.drawable.ic_download,
+                                ),
+                                contentDescription = stringResource(
+                                    R.string.music_download,
+                                ),
+                                tint = if (selected.isEmpty()) {
+                                    onSurfaceVariant.copy(alpha = 0.4f)
+                                } else {
+                                    onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = {
+                            if (selectedCount > 0) {
+                                showDeleteSelectedConfirm = true
+                            }
+                        },
+                    ) {
+                        Icon(
+                            painter = painterResource(
+                                R.drawable.ic_delete,
+                            ),
+                            contentDescription = stringResource(
+                                R.string.common_delete,
+                            ),
+                            tint = if (selectedCount == 0) {
+                                onSurfaceVariant.copy(alpha = 0.4f)
+                            } else {
+                                onSurfaceVariant
+                            },
+                        )
+                    }
+                }
+                } else {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1589,6 +1762,17 @@ private fun QueueDialog(
                             tint = onSurfaceVariant,
                         )
                     }
+                    Text(
+                        text = stringResource(
+                            R.string.music_queue_multi_select,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = onSurfaceVariant,
+                        modifier = Modifier
+                            .clickable { selectMode = true }
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                    )
+                }
                 }
                 if (state.queueDlTotal > 0) {
                     Text(
@@ -1617,17 +1801,34 @@ private fun QueueDialog(
                                 .padding(horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            if (selectMode) {
+                                QueueCheckBox(
+                                    checked = index in selected,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                            }
                             QueueRowText(
                                 name = item.name,
                                 singer = item.singer,
                                 isCurrent = isCurrent,
                                 modifier = Modifier.weight(1f),
-                                onClick = { onSelect(index) },
+                                onClick = {
+                                    if (selectMode) {
+                                        selected = if (index in selected) {
+                                            selected - index
+                                        } else {
+                                            selected + index
+                                        }
+                                    } else {
+                                        onSelect(index)
+                                    }
+                                },
                             )
                             if (isCurrent && state.playing) {
                                 PlayingBars()
                                 Spacer(Modifier.width(8.dp))
                             }
+                            if (!selectMode) {
                             IconButton(
                                 onClick = { onRemove(index) },
                                 modifier = Modifier.size(36.dp),
@@ -1643,11 +1844,11 @@ private fun QueueDialog(
                                     tint = onSurfaceVariant,
                                 )
                             }
+                            }
                         }
                     }
                 }
                 } else if (tab == 1) {
-                    val playedIndices = (state.index - 1 downTo 0).toList()
                     if (playedIndices.isEmpty()) {
                         Text(
                             text = stringResource(
@@ -1675,13 +1876,32 @@ private fun QueueDialog(
                                     verticalAlignment =
                                         Alignment.CenterVertically,
                                 ) {
+                                    if (selectMode) {
+                                        QueueCheckBox(
+                                            checked =
+                                                queueIndex in selected,
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                    }
                                     QueueRowText(
                                         name = item.name,
                                         singer = item.singer,
                                         isCurrent = false,
                                         modifier = Modifier.weight(1f),
-                                        onClick = { onSelect(queueIndex) },
+                                        onClick = {
+                                            if (selectMode) {
+                                                selected =
+                                                    if (queueIndex in selected) {
+                                                        selected - queueIndex
+                                                    } else {
+                                                        selected + queueIndex
+                                                    }
+                                            } else {
+                                                onSelect(queueIndex)
+                                            }
+                                        },
                                     )
+                                    if (!selectMode) {
                                     IconButton(
                                         onClick = { onRemove(queueIndex) },
                                         modifier = Modifier.size(36.dp),
@@ -1697,6 +1917,7 @@ private fun QueueDialog(
                                             modifier = Modifier.size(18.dp),
                                             tint = onSurfaceVariant,
                                         )
+                                    }
                                     }
                                     Spacer(Modifier.size(36.dp))
                                 }
@@ -1730,6 +1951,14 @@ private fun QueueDialog(
                                     verticalAlignment =
                                         Alignment.CenterVertically,
                                 ) {
+                                    if (selectMode) {
+                                        QueueCheckBox(
+                                            checked =
+                                                playlist.name in
+                                                    selectedPlaylists,
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                    }
                                     AsyncImage(
                                         model = playlist.tracks
                                             .firstOrNull()?.img,
@@ -1744,9 +1973,22 @@ private fun QueueDialog(
                                         modifier = Modifier
                                             .weight(1f)
                                             .clickable {
-                                                onPlayPlaylist(
-                                                    playlist.tracks,
-                                                )
+                                                if (selectMode) {
+                                                    selectedPlaylists =
+                                                        if (playlist.name in
+                                                            selectedPlaylists
+                                                        ) {
+                                                            selectedPlaylists -
+                                                                playlist.name
+                                                        } else {
+                                                            selectedPlaylists +
+                                                                playlist.name
+                                                        }
+                                                } else {
+                                                    onPlayPlaylist(
+                                                        playlist.tracks,
+                                                    )
+                                                }
                                             }
                                             .padding(vertical = 6.dp),
                                     ) {
@@ -1772,6 +2014,7 @@ private fun QueueDialog(
                                             color = onSurfaceVariant,
                                         )
                                     }
+                                    if (!selectMode) {
                                     IconButton(
                                         onClick = {
                                             LxPlaylists.delete(
@@ -1795,6 +2038,7 @@ private fun QueueDialog(
                                                 Modifier.size(18.dp),
                                             tint = onSurfaceVariant,
                                         )
+                                    }
                                     }
                                 }
                             }
@@ -1832,6 +2076,90 @@ private fun QueueDialog(
             dismissButton = {
                 TextButton(
                     onClick = { showDownloadConfirm = false },
+                ) {
+                    Text(text = stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+    if (showDownloadSelectedConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDownloadSelectedConfirm = false },
+            title = {
+                Text(text = stringResource(R.string.music_download))
+            },
+            text = {
+                Text(
+                    text = stringResource(
+                        R.string.music_download_selected_confirm,
+                        selected.size,
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val targets = selected
+                        showDownloadSelectedConfirm = false
+                        selected = emptySet()
+                        selectMode = false
+                        onDownloadItems(targets)
+                    },
+                ) {
+                    Text(text = stringResource(R.string.common_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showDownloadSelectedConfirm = false },
+                ) {
+                    Text(text = stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+    if (showDeleteSelectedConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteSelectedConfirm = false },
+            title = {
+                Text(text = stringResource(R.string.common_delete))
+            },
+            text = {
+                Text(
+                    text = stringResource(
+                        if (tab == 2) {
+                            R.string
+                                .music_delete_selected_playlists_confirm
+                        } else {
+                            R.string.music_delete_selected_songs_confirm
+                        },
+                        selectedCount,
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteSelectedConfirm = false
+                        if (tab == 2) {
+                            for (name in selectedPlaylists) {
+                                LxPlaylists.delete(context, name)
+                            }
+                            playlists = LxPlaylists.all(context)
+                            selectedPlaylists = emptySet()
+                        } else {
+                            onRemoveItems(selected)
+                            selected = emptySet()
+                        }
+                        selectMode = false
+                    },
+                ) {
+                    Text(text = stringResource(R.string.common_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showDeleteSelectedConfirm = false },
                 ) {
                     Text(text = stringResource(R.string.common_cancel))
                 }

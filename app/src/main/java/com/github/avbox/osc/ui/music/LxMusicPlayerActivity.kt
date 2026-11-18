@@ -464,6 +464,8 @@ class LxMusicPlayerActivity : BaseActivity() {
                         onClearQueue = { clearQueue() },
                         onPlayPlaylist = { tracks -> playAsQueue(tracks) },
                         onDownloadQueue = { downloadQueue() },
+                        onRemoveQueueItems = { targets -> removeQueueItems(targets) },
+                        onDownloadQueueItems = { targets -> downloadQueueItems(targets) },
                         onToggleFavorite = { toggleFavorite() },
                         onDownload = { downloadCurrent() },
                         onMuteToggle = { toggleMute() },
@@ -1415,6 +1417,44 @@ class LxMusicPlayerActivity : BaseActivity() {
         }
     }
 
+    /**
+     * Batch-removes the checked queue rows (v1.34.0, the queue
+     * dialog's multi-select delete). Deleting the current track
+     * plays whatever slides into its slot; selecting everything
+     * keeps the current track, mirroring [clearQueue].
+     */
+    private fun removeQueueItems(targets: Set<Int>) {
+        val queue = state.queue
+        val valid = targets.filter { it in queue.indices }.toSet()
+        if (valid.isEmpty() || queue.size <= 1) return
+        val wasCurrent = state.index in valid
+        val remaining = queue.filterIndexed { i, _ -> i !in valid }
+        if (remaining.isEmpty()) {
+            val current = state.current ?: return
+            state.queue = listOf(current)
+            state.index = 0
+            lastIndex = 0
+            lastQueueJson = MusicTrack.listToJson(state.queue)
+            publishQueueEdited()
+            return
+        }
+        val oldIndex = state.index
+        val newIndex = if (wasCurrent) {
+            oldIndex.coerceAtMost(remaining.size - 1)
+        } else {
+            oldIndex - valid.count { it < oldIndex }
+        }
+        state.queue = remaining
+        state.index = newIndex
+        lastIndex = newIndex
+        lastQueueJson = MusicTrack.listToJson(remaining)
+        if (wasCurrent) {
+            playAt(newIndex)
+        } else {
+            publishQueueEdited()
+        }
+    }
+
     /** Clears the queue except the current track, which keeps playing. */
     private fun clearQueue() {
         val current = state.current ?: return
@@ -1639,6 +1679,20 @@ class LxMusicPlayerActivity : BaseActivity() {
      * state.queueDlTotal/Done/Failed for the dialog to show.
      */
     private fun downloadQueue() {
+        downloadTracks(state.queue)
+    }
+
+    /**
+     * Batch-downloads only the checked queue rows (v1.34.0, the
+     * queue dialog's multi-select download); the whole-queue
+     * button and this share [downloadTracks].
+     */
+    private fun downloadQueueItems(targets: Set<Int>) {
+        val tracks = state.queue.filterIndexed { i, _ -> i in targets }
+        downloadTracks(tracks)
+    }
+
+    private fun downloadTracks(tracks: List<MusicTrack>) {
         if (queueDownloadJob?.isActive == true) {
             queueDownloadJob?.cancel()
             queueDownloadJob = null
@@ -1652,7 +1706,6 @@ class LxMusicPlayerActivity : BaseActivity() {
             ).show()
             return
         }
-        val tracks = state.queue
         if (tracks.isEmpty()) return
         state.queueDlTotal = tracks.size
         state.queueDlDone = 0

@@ -219,6 +219,12 @@
     <string name="music_playlist_create_title">存为歌单</string>
     <string name="music_playlist_name_hint">歌单名称</string>
     <string name="music_playlist_count">%1$d 首</string>
+    <string name="music_queue_multi_select">多选</string>
+    <string name="music_queue_selected_count">已选 %1$d 首</string>
+    <string name="music_queue_selected_playlist_count">已选 %1$d 个</string>
+    <string name="music_download_selected_confirm">下载所选 %1$d 首？</string>
+    <string name="music_delete_selected_songs_confirm">删除所选 %1$d 首？正在播的那首如果也在其中，会接着播下一首</string>
+    <string name="music_delete_selected_playlists_confirm">删除所选 %1$d 个歌单？</string>
     <string name="music_song_index">第 %1$d 首</string>
     <string name="tab_home">首页</string>
     <string name="tab_records">记录</string>

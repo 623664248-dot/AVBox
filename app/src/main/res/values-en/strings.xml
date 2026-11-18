@@ -219,6 +219,12 @@
     <string name="music_playlist_create_title">Save as playlist</string>
     <string name="music_playlist_name_hint">Playlist name</string>
     <string name="music_playlist_count">%1$d songs</string>
+    <string name="music_queue_multi_select">Select</string>
+    <string name="music_queue_selected_count">%1$d selected</string>
+    <string name="music_queue_selected_playlist_count">%1$d selected</string>
+    <string name="music_download_selected_confirm">Download the selected %1$d songs?</string>
+    <string name="music_delete_selected_songs_confirm">Delete the selected %1$d songs? If the playing song is among them, playback moves to the next one.</string>
+    <string name="music_delete_selected_playlists_confirm">Delete the selected %1$d playlists?</string>
     <string name="music_song_index">Track %1$d</string>
     <string name="tab_home">Home</string>
     <string name="tab_records">Records</string>

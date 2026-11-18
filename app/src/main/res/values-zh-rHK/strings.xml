@@ -28,6 +28,12 @@
     <string name="music_playlist_create_title">存為歌單</string>
     <string name="music_playlist_name_hint">歌單名稱</string>
     <string name="music_playlist_count">%1$d 首</string>
+    <string name="music_queue_multi_select">多選</string>
+    <string name="music_queue_selected_count">已選 %1$d 首</string>
+    <string name="music_queue_selected_playlist_count">已選 %1$d 個</string>
+    <string name="music_download_selected_confirm">下載所選 %1$d 首？</string>
+    <string name="music_delete_selected_songs_confirm">刪除所選 %1$d 首？正在播的那首如果也在其中，會接著播下一首</string>
+    <string name="music_delete_selected_playlists_confirm">刪除所選 %1$d 個歌單？</string>
     <string name="music_mode_list">列表循環</string>
     <string name="theme_nav_bar">底部導航</string>
     <string name="settings_nav_animation_disable">禁用導航動畫</string>
