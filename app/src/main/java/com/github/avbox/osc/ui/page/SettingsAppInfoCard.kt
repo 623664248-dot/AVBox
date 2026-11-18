@@ -4,17 +4,22 @@ import android.util.Base64
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -96,76 +101,70 @@ private fun rememberCalligraphyFamily(): FontFamily {
  * in raw pixels (~9 dp of travel). It is now computed
  * in dp, and the blobs also scale-breathe against each
  * other so the motion is unmistakable.
+ * v1.35.3: his second recording STILL showed a frozen
+ * wash, so the soft-gradient approach is abandoned as
+ * the motion carrier. All animated values are now read
+ * in composition and applied through layout offsets
+ * (no graphicsLayer animation at all), the blobs are
+ * darker, and a wide ink band sweeps across the whole
+ * card every ~5.6 s — motion nobody can miss, and a
+ * visible signature of the new build.
  */
 @Composable
 internal fun AppInfoHeaderCard() {
     val calligraphy = rememberCalligraphyFamily()
-    val driftTransition = rememberInfiniteTransition(label = "inkDrift")
-    // Drift values are in dp (v1.35.2): graphicsLayer
-    // translations are raw pixels, and v1.35.1's ±26 px was
-    // only ~9 dp on Torres's high-density screen — on a soft
-    // radial wash that is effectively invisible, as his
-    // recording proved. The graphicsLayer block converts
-    // dp to px itself (its scope is a Density).
-    val drift by driftTransition.animateFloat(
-        initialValue = -30f,
-        targetValue = 30f,
+    val anim = rememberInfiniteTransition(label = "inkCard")
+    // Blob drift, in dp, applied via Modifier.offset
+    // (layout) — read in composition on purpose (v1.35.3).
+    val drift by anim.animateFloat(
+        initialValue = -16f,
+        targetValue = 16f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 8000),
+            animation = tween(durationMillis = 9000),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "inkDriftX",
     )
-    val driftY by driftTransition.animateFloat(
-        initialValue = -10f,
-        targetValue = 10f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 10000),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "inkDriftY",
-    )
-    val inkPulse by driftTransition.animateFloat(
-        initialValue = 0.14f,
-        targetValue = 0.24f,
+    val inkPulse by anim.animateFloat(
+        initialValue = 0.16f,
+        targetValue = 0.26f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = 6000),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "inkPulse",
     )
-    val inkScale by driftTransition.animateFloat(
-        initialValue = 0.92f,
-        targetValue = 1.12f,
+    // Sweep: crosses the card in the first 1.8 s of each
+    // 5.6 s cycle, then rests off-card (v1.35.3).
+    val sweep by anim.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 7000),
-            repeatMode = RepeatMode.Reverse,
+            animation = keyframes {
+                durationMillis = 5600
+                0f at 0
+                1f at 1800
+                1f at 5600
+            },
+            repeatMode = RepeatMode.Restart,
         ),
-        label = "inkScale",
+        label = "inkSweep",
     )
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
             .clip(HeaderCardShape)
             .background(PaperColor),
     ) {
-        // Ink layer (v1.35.1): matchParentSize keeps the blobs
-        // from sizing the card — in v1.35.0 they were direct
-        // children, so the 240 dp blob stretched the card to
-        // over twice its intended height. The drift is also
-        // wider, faster and deeper than v1.35.0's, whose wash
-        // was too faint to see moving.
+        val cardWidthDp = maxWidth.value
+        // Ink layer (v1.35.1): matchParentSize keeps the
+        // decorations from sizing the card.
         Box(modifier = Modifier.matchParentSize()) {
             Box(
                 modifier = Modifier
                     .size(220.dp)
                     .align(Alignment.TopEnd)
-                    .graphicsLayer {
-                        translationX = 30.dp.toPx() + drift.dp.toPx()
-                        translationY = (-70).dp.toPx() + driftY.dp.toPx()
-                        scaleX = inkScale
-                        scaleY = inkScale
-                    }
+                    .offset(x = (30f + drift).dp, y = (-70).dp)
                     .background(
                         Brush.radialGradient(
                             listOf(
@@ -179,16 +178,31 @@ internal fun AppInfoHeaderCard() {
                 modifier = Modifier
                     .size(180.dp)
                     .align(Alignment.BottomStart)
-                    .graphicsLayer {
-                        translationX = (-40).dp.toPx() - drift.dp.toPx()
-                        translationY = 60.dp.toPx() - driftY.dp.toPx()
-                        scaleX = 2.04f - inkScale
-                        scaleY = 2.04f - inkScale
-                    }
+                    .offset(x = (-40f - drift).dp, y = 60.dp)
                     .background(
                         Brush.radialGradient(
                             listOf(
                                 InkColor.copy(alpha = inkPulse * 0.7f),
+                                Color.Transparent,
+                            ),
+                        ),
+                    ),
+            )
+            // The sweeping ink band (v1.35.3): a soft dark
+            // band, tilted like a brush stroke, travelling
+            // the full width of the card.
+            Box(
+                modifier = Modifier
+                    .width(110.dp)
+                    .fillMaxHeight()
+                    .align(Alignment.CenterStart)
+                    .offset(x = (-130f + sweep * (cardWidthDp + 260f)).dp)
+                    .graphicsLayer { rotationZ = -10f }
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                Color.Transparent,
+                                InkColor.copy(alpha = 0.16f),
                                 Color.Transparent,
                             ),
                         ),
