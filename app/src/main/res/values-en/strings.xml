@@ -211,6 +211,14 @@
     <string name="player_picture_unavailable_decoder">The current decoder doesn\'t support picture adjustment</string>
 
     <string name="music_queue">Queue</string>
+    <string name="music_queue_playing">Playing</string>
+    <string name="music_queue_played">Played</string>
+    <string name="music_queue_played_empty">No played songs yet</string>
+    <string name="music_playlists">Playlists</string>
+    <string name="music_playlists_empty">No playlists yet. Tap + in the toolbar to save the current queue.</string>
+    <string name="music_playlist_create_title">Save as playlist</string>
+    <string name="music_playlist_name_hint">Playlist name</string>
+    <string name="music_playlist_count">%1$d songs</string>
     <string name="music_song_index">Track %1$d</string>
     <string name="tab_home">Home</string>
     <string name="tab_records">Records</string>

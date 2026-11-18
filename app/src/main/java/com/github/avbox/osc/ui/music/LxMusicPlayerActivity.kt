@@ -462,6 +462,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                         onRemoveQueueItem = { i -> removeQueueItem(i) },
                         onMoveQueueItem = { from, to -> moveQueueItem(from, to) },
                         onClearQueue = { clearQueue() },
+                        onPlayPlaylist = { tracks -> playAsQueue(tracks) },
                         onToggleFavorite = { toggleFavorite() },
                         onDownload = { downloadCurrent() },
                         onMuteToggle = { toggleMute() },
@@ -1440,6 +1441,20 @@ class LxMusicPlayerActivity : BaseActivity() {
         lastIndex = 0
         lastQueueJson = MusicTrack.listToJson(state.queue)
         publishQueueEdited()
+    }
+
+    /**
+     * Replaces the queue with an external track list (a saved
+     * playlist from the queue dialog) and plays it from the top.
+     */
+    private fun playAsQueue(tracks: List<MusicTrack>) {
+        if (tracks.isEmpty()) return
+        state.queue = tracks
+        state.index = 0
+        lastIndex = 0
+        lastQueueJson = MusicTrack.listToJson(tracks)
+        state.showQueue = false
+        playAt(0)
     }
 
     /**

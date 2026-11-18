@@ -38,21 +38,25 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SliderState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -93,9 +97,11 @@ import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import coil3.compose.AsyncImage
 import com.github.avbox.osc.R
+import com.github.avbox.osc.music.LxPlaylists
 import com.github.avbox.osc.music.MusicTrack
 import com.github.avbox.osc.ui.components.AVBoxOptionSheet
 
@@ -118,6 +124,7 @@ fun LxMusicPlayerScreen(
     onRemoveQueueItem: (Int) -> Unit = {},
     onMoveQueueItem: (Int, Int) -> Unit = { _, _ -> },
     onClearQueue: () -> Unit = {},
+    onPlayPlaylist: (List<MusicTrack>) -> Unit = {},
     onToggleFavorite: () -> Unit = {},
     onDownload: () -> Unit = {},
     onMuteToggle: () -> Unit = {},
@@ -590,6 +597,7 @@ fun LxMusicPlayerScreen(
             onRemove = onRemoveQueueItem,
             onMove = onMoveQueueItem,
             onClear = onClearQueue,
+            onPlayPlaylist = onPlayPlaylist,
         )
     }
 }
@@ -1286,6 +1294,140 @@ private fun formatTimeMs(ms: Long): String {
  * a side effect of tidying the list is a worse surprise.
  */
 @Composable
+/**
+ * Splits a queue track into the (title, artist) pair the row shows,
+ * QQ-style. Source names often embed the artist as "歌手《歌名》" or
+ * "歌手 - 歌名"; showing the raw name plus the singer field would
+ * print the artist twice and truncate the title. When the name has
+ * neither shape, the singer is appended unless the name already
+ * contains it.
+ */
+private fun queueDisplayParts(
+    name: String,
+    singer: String,
+): Pair<String, String> {
+    val open = name.indexOf('\u300a')
+    val close = if (open >= 0) name.indexOf('\u300b', open) else -1
+    if (open > 0 && close > open) {
+        val artist = name.substring(0, open).trim()
+        val title = name.substring(open + 1, close).trim()
+        val suffix = name.substring(close + 1).trim()
+        if (title.isNotEmpty()) {
+            val fullTitle =
+                if (suffix.isEmpty()) title else "$title $suffix"
+            return fullTitle to artist.ifEmpty { singer }
+        }
+    }
+    if (singer.isNotEmpty() && name.startsWith(singer)) {
+        val rest = name.substring(singer.length)
+            .trim()
+            .trimStart('-', '\u2014', '\u2013')
+            .trim()
+        if (rest.isNotEmpty()) return rest to singer
+    }
+    val showSinger =
+        if (singer.isNotEmpty() && name.contains(singer)) "" else singer
+    return name to showSinger
+}
+
+/** One queue row's "title - artist" label, QQ-style two-tone sizes. */
+@Composable
+private fun QueueRowText(
+    name: String,
+    singer: String,
+    isCurrent: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val (title, artist) = queueDisplayParts(name, singer)
+    Text(
+        text = buildAnnotatedString {
+            withStyle(
+                SpanStyle(
+                    color = if (isCurrent) primary else onSurface,
+                    fontWeight = if (isCurrent) {
+                        FontWeight.Bold
+                    } else {
+                        FontWeight.SemiBold
+                    },
+                    fontSize = 15.sp,
+                ),
+            ) {
+                append(title)
+            }
+            if (artist.isNotEmpty()) {
+                withStyle(
+                    SpanStyle(
+                        color = onSurfaceVariant,
+                        fontSize = 13.sp,
+                    ),
+                ) {
+                    append(" - " + artist)
+                }
+            }
+        },
+        style = MaterialTheme.typography.bodyLarge,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier
+            .clickable { onClick() }
+            .padding(vertical = 8.dp),
+    )
+}
+
+/** One tab in the queue dialog header, QQ-style with an underline. */
+@Composable
+private fun QueueTab(
+    label: String,
+    count: Int,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(
+        modifier = Modifier.clickable { onClick() },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = label,
+                style = if (selected) {
+                    MaterialTheme.typography.titleMedium
+                } else {
+                    MaterialTheme.typography.bodyLarge
+                },
+                fontWeight = if (selected) {
+                    FontWeight.Bold
+                } else {
+                    FontWeight.Normal
+                },
+                color = if (selected) onSurface else onSurfaceVariant,
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = count.toString(),
+                style = MaterialTheme.typography.bodySmall,
+                color = onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 2.dp),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .padding(top = 4.dp)
+                .width(24.dp)
+                .height(2.dp)
+                .background(
+                    if (selected) primary else Color.Transparent,
+                ),
+        )
+    }
+}
+
 private fun QueueDialog(
     state: LxPlayerState,
     onDismiss: () -> Unit,
@@ -1294,11 +1436,23 @@ private fun QueueDialog(
     onRemove: (Int) -> Unit,
     onMove: (Int, Int) -> Unit,
     onClear: () -> Unit,
+    onPlayPlaylist: (List<MusicTrack>) -> Unit,
 ) {
     val listState = rememberLazyListState()
-    LaunchedEffect(Unit) {
-        if (state.index > 0) listState.scrollToItem(state.index)
+    var tab by remember { mutableStateOf(0) }
+    LaunchedEffect(tab) {
+        if (tab == 0) {
+            if (state.index > 0) listState.scrollToItem(state.index)
+        } else {
+            listState.scrollToItem(0)
+        }
     }
+    val context = LocalContext.current
+    var playlists by remember {
+        mutableStateOf(LxPlaylists.all(context))
+    }
+    var showCreate by remember { mutableStateOf(false) }
+    var newPlaylistName by remember { mutableStateOf("") }
     var dragIndex by remember { mutableStateOf(-1) }
     var dragOffsetPx by remember { mutableStateOf(0f) }
     val rowHeightPx = with(LocalDensity.current) { 56.dp.toPx() }
@@ -1313,12 +1467,31 @@ private fun QueueDialog(
                 .fillMaxHeight(0.75f),
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = stringResource(R.string.music_queue) +
-                        " \u00b7 " + state.queue.size,
-                    style = MaterialTheme.typography.titleMedium,
+                Row(
                     modifier = Modifier.padding(bottom = 4.dp),
-                )
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    QueueTab(
+                        label = stringResource(R.string.music_queue_playing),
+                        count = state.queue.size,
+                        selected = tab == 0,
+                        onClick = { tab = 0 },
+                    )
+                    Spacer(Modifier.width(20.dp))
+                    QueueTab(
+                        label = stringResource(R.string.music_queue_played),
+                        count = state.index,
+                        selected = tab == 1,
+                        onClick = { tab = 1 },
+                    )
+                    Spacer(Modifier.width(20.dp))
+                    QueueTab(
+                        label = stringResource(R.string.music_playlists),
+                        count = playlists.size,
+                        selected = tab == 2,
+                        onClick = { tab = 2 },
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1343,6 +1516,23 @@ private fun QueueDialog(
                         )
                     }
                     Spacer(Modifier.weight(1f))
+                    IconButton(
+                        onClick = {
+                            newPlaylistName =
+                                state.current?.singer ?: ""
+                            showCreate = true
+                        },
+                    ) {
+                        Icon(
+                            painter = painterResource(
+                                R.drawable.ic_subscribe_add,
+                            ),
+                            contentDescription = stringResource(
+                                R.string.music_playlist_create_title,
+                            ),
+                            tint = onSurfaceVariant,
+                        )
+                    }
                     IconButton(onClick = onClear) {
                         Icon(
                             painter = painterResource(R.drawable.ic_delete),
@@ -1351,6 +1541,7 @@ private fun QueueDialog(
                         )
                     }
                 }
+                if (tab == 0) {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxWidth(),
@@ -1383,39 +1574,12 @@ private fun QueueDialog(
                                 .padding(horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                text = buildAnnotatedString {
-                                    withStyle(
-                                        SpanStyle(
-                                            color = if (isCurrent) {
-                                                primary
-                                            } else {
-                                                onSurface
-                                            },
-                                            fontWeight = if (isCurrent) {
-                                                FontWeight.Bold
-                                            } else {
-                                                FontWeight.Normal
-                                            },
-                                        ),
-                                    ) {
-                                        append(item.name)
-                                    }
-                                    if (item.singer.isNotEmpty()) {
-                                        withStyle(
-                                            SpanStyle(color = onSurfaceVariant),
-                                        ) {
-                                            append(" - " + item.singer)
-                                        }
-                                    }
-                                },
-                                style = MaterialTheme.typography.bodyLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable { onSelect(index) }
-                                    .padding(vertical = 8.dp),
+                            QueueRowText(
+                                name = item.name,
+                                singer = item.singer,
+                                isCurrent = isCurrent,
+                                modifier = Modifier.weight(1f),
+                                onClick = { onSelect(index) },
                             )
                             if (isCurrent && state.playing) {
                                 PlayingBars()
@@ -1484,8 +1648,213 @@ private fun QueueDialog(
                         }
                     }
                 }
+                } else if (tab == 1) {
+                    val playedIndices = (0 until state.index).reversed()
+                    if (playedIndices.isEmpty()) {
+                        Text(
+                            text = stringResource(
+                                R.string.music_queue_played_empty,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 24.dp),
+                        )
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            items(
+                                playedIndices,
+                                key = { it },
+                            ) { queueIndex ->
+                                val item = state.queue[queueIndex]
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(56.dp)
+                                        .padding(horizontal = 4.dp),
+                                    verticalAlignment =
+                                        Alignment.CenterVertically,
+                                ) {
+                                    QueueRowText(
+                                        name = item.name,
+                                        singer = item.singer,
+                                        isCurrent = false,
+                                        modifier = Modifier.weight(1f),
+                                        onClick = { onSelect(queueIndex) },
+                                    )
+                                    IconButton(
+                                        onClick = { onRemove(queueIndex) },
+                                        modifier = Modifier.size(36.dp),
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(
+                                                R.drawable.player_ic_close,
+                                            ),
+                                            contentDescription =
+                                                stringResource(
+                                                    R.string.common_delete,
+                                                ),
+                                            modifier = Modifier.size(18.dp),
+                                            tint = onSurfaceVariant,
+                                        )
+                                    }
+                                    Spacer(Modifier.size(36.dp))
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    if (playlists.isEmpty()) {
+                        Text(
+                            text = stringResource(
+                                R.string.music_playlists_empty,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 24.dp),
+                        )
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            items(
+                                playlists,
+                                key = { it.name },
+                            ) { playlist ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(56.dp)
+                                        .padding(horizontal = 4.dp),
+                                    verticalAlignment =
+                                        Alignment.CenterVertically,
+                                ) {
+                                    AsyncImage(
+                                        model = playlist.tracks
+                                            .firstOrNull()?.img,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(6.dp)),
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                onPlayPlaylist(
+                                                    playlist.tracks,
+                                                )
+                                            }
+                                            .padding(vertical = 6.dp),
+                                    ) {
+                                        Text(
+                                            text = playlist.name,
+                                            style = MaterialTheme
+                                                .typography.bodyLarge,
+                                            fontWeight =
+                                                FontWeight.SemiBold,
+                                            fontSize = 15.sp,
+                                            maxLines = 1,
+                                            overflow =
+                                                TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = stringResource(
+                                                R.string
+                                                    .music_playlist_count,
+                                                playlist.tracks.size,
+                                            ),
+                                            style = MaterialTheme
+                                                .typography.bodySmall,
+                                            color = onSurfaceVariant,
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            LxPlaylists.delete(
+                                                context,
+                                                playlist.name,
+                                            )
+                                            playlists =
+                                                LxPlaylists.all(context)
+                                        },
+                                        modifier = Modifier.size(36.dp),
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(
+                                                R.drawable.player_ic_close,
+                                            ),
+                                            contentDescription =
+                                                stringResource(
+                                                    R.string.common_delete,
+                                                ),
+                                            modifier =
+                                                Modifier.size(18.dp),
+                                            tint = onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
+    }
+    if (showCreate) {
+        AlertDialog(
+            onDismissRequest = { showCreate = false },
+            title = {
+                Text(
+                    text = stringResource(
+                        R.string.music_playlist_create_title,
+                    ),
+                )
+            },
+            text = {
+                OutlinedTextField(
+                    value = newPlaylistName,
+                    onValueChange = { newPlaylistName = it },
+                    singleLine = true,
+                    placeholder = {
+                        Text(
+                            text = stringResource(
+                                R.string.music_playlist_name_hint,
+                            ),
+                        )
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val name = newPlaylistName.trim()
+                        if (name.isNotEmpty()) {
+                            LxPlaylists.create(
+                                context,
+                                name,
+                                state.queue,
+                            )
+                            playlists = LxPlaylists.all(context)
+                            showCreate = false
+                            tab = 2
+                        }
+                    },
+                ) {
+                    Text(text = stringResource(R.string.common_save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreate = false }) {
+                    Text(text = stringResource(R.string.common_cancel))
+                }
+            },
+        )
     }
 }
 
