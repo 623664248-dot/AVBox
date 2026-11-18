@@ -87,19 +87,41 @@ private fun rememberCalligraphyFamily(): FontFamily {
  * "dynamic" touch from the animated mockup, kept subtle).
  * The app-version pill he asked to drop is gone; the
  * version still lives in the About sheet.
+ * v1.35.1: his screenshot showed the card stretched to
+ * over twice its height and the drift invisible — the
+ * ink blobs now live in a matchParentSize layer and
+ * drift wider and deeper.
  */
 @Composable
 internal fun AppInfoHeaderCard() {
     val calligraphy = rememberCalligraphyFamily()
     val driftTransition = rememberInfiniteTransition(label = "inkDrift")
     val drift by driftTransition.animateFloat(
-        initialValue = -12f,
-        targetValue = 12f,
+        initialValue = -26f,
+        targetValue = 26f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 9000),
+            animation = tween(durationMillis = 6500),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "inkDriftX",
+    )
+    val driftY by driftTransition.animateFloat(
+        initialValue = -16f,
+        targetValue = 16f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 8200),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "inkDriftY",
+    )
+    val inkPulse by driftTransition.animateFloat(
+        initialValue = 0.10f,
+        targetValue = 0.20f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 5000),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "inkPulse",
     )
     Box(
         modifier = Modifier
@@ -107,52 +129,60 @@ internal fun AppInfoHeaderCard() {
             .clip(HeaderCardShape)
             .background(PaperColor),
     ) {
-        Box(
-            modifier = Modifier
-                .size(240.dp)
-                .align(Alignment.TopEnd)
-                .graphicsLayer {
-                    translationX = 90f + drift
-                    translationY = -110f
-                }
-                .background(
-                    Brush.radialGradient(
-                        listOf(
-                            InkColor.copy(alpha = 0.13f),
-                            Color.Transparent,
+        // Ink layer (v1.35.1): matchParentSize keeps the blobs
+        // from sizing the card — in v1.35.0 they were direct
+        // children, so the 240 dp blob stretched the card to
+        // over twice its intended height. The drift is also
+        // wider, faster and deeper than v1.35.0's, whose wash
+        // was too faint to see moving.
+        Box(modifier = Modifier.matchParentSize()) {
+            Box(
+                modifier = Modifier
+                    .size(240.dp)
+                    .align(Alignment.TopEnd)
+                    .graphicsLayer {
+                        translationX = 40f + drift
+                        translationY = -90f + driftY
+                    }
+                    .background(
+                        Brush.radialGradient(
+                            listOf(
+                                InkColor.copy(alpha = inkPulse),
+                                Color.Transparent,
+                            ),
                         ),
                     ),
-                ),
-        )
-        Box(
-            modifier = Modifier
-                .size(200.dp)
-                .align(Alignment.BottomStart)
-                .graphicsLayer {
-                    translationX = -80f - drift
-                    translationY = 90f
-                }
-                .background(
-                    Brush.radialGradient(
-                        listOf(
-                            InkColor.copy(alpha = 0.09f),
-                            Color.Transparent,
+            )
+            Box(
+                modifier = Modifier
+                    .size(200.dp)
+                    .align(Alignment.BottomStart)
+                    .graphicsLayer {
+                        translationX = -50f - drift
+                        translationY = 70f - driftY
+                    }
+                    .background(
+                        Brush.radialGradient(
+                            listOf(
+                                InkColor.copy(alpha = inkPulse * 0.7f),
+                                Color.Transparent,
+                            ),
                         ),
                     ),
-                ),
-        )
+            )
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 22.dp),
+                .padding(horizontal = 24.dp, vertical = 18.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = stringResource(R.string.settings_brand_name),
                     fontFamily = calligraphy,
-                    fontSize = 46.sp,
-                    lineHeight = 54.sp,
+                    fontSize = 42.sp,
+                    lineHeight = 50.sp,
                     color = InkColor,
                 )
                 Spacer(Modifier.height(4.dp))
