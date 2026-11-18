@@ -2134,3 +2134,16 @@ LxMusicPlayerScreen 第 1704 行，(0 until state.index)
 LazyColumn 的 items() 不接受。改成
 (state.index - 1 downTo 0).toList()。其余与
 v1.32.0 相同。
+
+# v1.33.0 队列面板继续贴近 QQ + 去掉拖动手柄
+
+Torres 试用 v1.32.1 后对照 QQ 截图反馈：
+1. 右侧三道杠（拖动手柄）点着没反应，要求去掉——它
+   本来就是长按拖动排序，他不用这个功能。整列删除，
+   连带 onMoveQueueItem / moveQueueItem 拖动排序一并
+   移除（删除、清空、点播不受影响）。
+2. 面板改成 QQ 那种底部抽屉：全宽贴底、顶部圆角，
+   点上方灰色区域关闭（原来是居中浮卡）。
+3. 正在播的一行改 QQ 绿（#31C27C，含律动竖条），
+   页签下划线改黑色；歌名 16sp、行高 60dp，更贴近
+   QQ 的行距。

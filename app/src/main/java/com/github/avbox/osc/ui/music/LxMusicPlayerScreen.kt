@@ -99,6 +99,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import com.github.avbox.osc.R
 import com.github.avbox.osc.music.LxPlaylists
@@ -122,7 +123,6 @@ fun LxMusicPlayerScreen(
     onEqCustomLevelsChanged: (List<Int>) -> Unit = {},
     onToggleLoopMode: () -> Unit = {},
     onRemoveQueueItem: (Int) -> Unit = {},
-    onMoveQueueItem: (Int, Int) -> Unit = { _, _ -> },
     onClearQueue: () -> Unit = {},
     onPlayPlaylist: (List<MusicTrack>) -> Unit = {},
     onDownloadQueue: () -> Unit = {},
@@ -596,7 +596,6 @@ fun LxMusicPlayerScreen(
             onSelect = onSelectQueueItem,
             onToggleLoopMode = onToggleLoopMode,
             onRemove = onRemoveQueueItem,
-            onMove = onMoveQueueItem,
             onClear = onClearQueue,
             onPlayPlaylist = onPlayPlaylist,
             onDownloadQueue = onDownloadQueue,
@@ -1320,6 +1319,9 @@ private fun queueDisplayParts(
     return name to showSinger
 }
 
+/** QQ Music's accent green, used for the playing row in the queue. */
+private val QueueAccentGreen = Color(0xFF31C27C)
+
 /** One queue row's "title - artist" label, QQ-style two-tone sizes. */
 @Composable
 private fun QueueRowText(
@@ -1329,7 +1331,6 @@ private fun QueueRowText(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val primary = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
     val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
     val (title, artist) = queueDisplayParts(name, singer)
@@ -1337,13 +1338,17 @@ private fun QueueRowText(
         text = buildAnnotatedString {
             withStyle(
                 SpanStyle(
-                    color = if (isCurrent) primary else onSurface,
+                    color = if (isCurrent) {
+                        QueueAccentGreen
+                    } else {
+                        onSurface
+                    },
                     fontWeight = if (isCurrent) {
                         FontWeight.Bold
                     } else {
                         FontWeight.SemiBold
                     },
-                    fontSize = 15.sp,
+                    fontSize = 16.sp,
                 ),
             ) {
                 append(title)
@@ -1412,7 +1417,7 @@ private fun QueueTab(
                 .width(24.dp)
                 .height(2.dp)
                 .background(
-                    if (selected) primary else Color.Transparent,
+                    if (selected) onSurface else Color.Transparent,
                 ),
         )
     }
@@ -1430,7 +1435,11 @@ private fun QueueTab(
  * a side effect of tidying the list is a worse surprise.
  * v1.31.0: QQ-style tabs （正在播放 / 已播歌曲 / 歌单）,
  * split title - artist rows, save-queue-as-playlist; v1.32.0
- * adds the batch-download button to the toolbar.
+ * adds the batch-download button to the toolbar. v1.33.0:
+ * the panel becomes a bottom sheet like QQ's, the drag handle
+ * is removed (Torres: tapping it did nothing — it was
+ * long-press-only, and he does not reorder), and the playing
+ * row takes QQ's accent green.
  */
 @Composable
 private fun QueueDialog(
@@ -1439,7 +1448,6 @@ private fun QueueDialog(
     onSelect: (Int) -> Unit,
     onToggleLoopMode: () -> Unit,
     onRemove: (Int) -> Unit,
-    onMove: (Int, Int) -> Unit,
     onClear: () -> Unit,
     onPlayPlaylist: (List<MusicTrack>) -> Unit,
     onDownloadQueue: () -> Unit,
@@ -1460,20 +1468,35 @@ private fun QueueDialog(
     var showCreate by remember { mutableStateOf(false) }
     var showDownloadConfirm by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
-    var dragIndex by remember { mutableStateOf(-1) }
-    var dragOffsetPx by remember { mutableStateOf(0f) }
-    val rowHeightPx = with(LocalDensity.current) { 56.dp.toPx() }
     val primary = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
     val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.75f),
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable { onDismiss() },
+            )
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = 24.dp,
+                    topEnd = 24.dp,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.82f),
+            ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 16.dp),
+            ) {
                 Row(
                     modifier = Modifier.padding(bottom = 4.dp),
                     verticalAlignment = Alignment.Bottom,
@@ -1587,26 +1610,10 @@ private fun QueueDialog(
                         key = { index, _ -> index },
                     ) { index, item ->
                         val isCurrent = index == state.index
-                        val dragging = index == dragIndex
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(56.dp)
-                                .then(
-                                    if (dragging) {
-                                        Modifier
-                                            .zIndex(1f)
-                                            .graphicsLayer {
-                                                translationY = dragOffsetPx
-                                            }
-                                            .background(
-                                                MaterialTheme.colorScheme
-                                                    .surfaceVariant,
-                                            )
-                                    } else {
-                                        Modifier
-                                    },
-                                )
+                                .height(60.dp)
                                 .padding(horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -1633,51 +1640,6 @@ private fun QueueDialog(
                                         R.string.common_delete,
                                     ),
                                     modifier = Modifier.size(18.dp),
-                                    tint = onSurfaceVariant,
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .pointerInput(index) {
-                                        detectDragGesturesAfterLongPress(
-                                            onDragStart = {
-                                                dragIndex = index
-                                                dragOffsetPx = 0f
-                                            },
-                                            onDrag = { change, dragAmount ->
-                                                change.consume()
-                                                dragOffsetPx += dragAmount.y
-                                            },
-                                            onDragEnd = {
-                                                val steps =
-                                                    (dragOffsetPx / rowHeightPx)
-                                                        .roundToInt()
-                                                val target = (index + steps)
-                                                    .coerceIn(
-                                                        0,
-                                                        state.queue.size - 1,
-                                                    )
-                                                dragIndex = -1
-                                                dragOffsetPx = 0f
-                                                if (target != index) {
-                                                    onMove(index, target)
-                                                }
-                                            },
-                                            onDragCancel = {
-                                                dragIndex = -1
-                                                dragOffsetPx = 0f
-                                            },
-                                        )
-                                    },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    painter = painterResource(
-                                        R.drawable.ic_music_queue,
-                                    ),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(20.dp),
                                     tint = onSurfaceVariant,
                                 )
                             }
@@ -1708,7 +1670,7 @@ private fun QueueDialog(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(56.dp)
+                                        .height(60.dp)
                                         .padding(horizontal = 4.dp),
                                     verticalAlignment =
                                         Alignment.CenterVertically,
@@ -1841,6 +1803,7 @@ private fun QueueDialog(
                 }
             }
         }
+        }
     }
     if (showDownloadConfirm) {
         AlertDialog(
@@ -1955,7 +1918,7 @@ private fun PlayingBars() {
                     .width(3.dp)
                     .height(barHeight.dp)
                     .background(
-                        MaterialTheme.colorScheme.primary,
+                        QueueAccentGreen,
                         RoundedCornerShape(1.dp),
                     ),
             )

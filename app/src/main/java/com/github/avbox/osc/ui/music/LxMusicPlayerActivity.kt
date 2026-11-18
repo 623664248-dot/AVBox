@@ -461,7 +461,6 @@ class LxMusicPlayerActivity : BaseActivity() {
                         },
                         onToggleLoopMode = { toggleLoopMode() },
                         onRemoveQueueItem = { i -> removeQueueItem(i) },
-                        onMoveQueueItem = { from, to -> moveQueueItem(from, to) },
                         onClearQueue = { clearQueue() },
                         onPlayPlaylist = { tracks -> playAsQueue(tracks) },
                         onDownloadQueue = { downloadQueue() },
@@ -1414,24 +1413,6 @@ class LxMusicPlayerActivity : BaseActivity() {
         } else {
             publishQueueEdited()
         }
-    }
-
-    private fun moveQueueItem(from: Int, to: Int) {
-        val queue = state.queue
-        if (from !in queue.indices || to !in queue.indices || from == to) return
-        val reordered = queue.toMutableList()
-        reordered.add(to, reordered.removeAt(from))
-        state.queue = reordered
-        val current = state.index
-        state.index = when {
-            current == from -> to
-            from < to && current in (from + 1)..to -> current - 1
-            from > to && current in to until from -> current + 1
-            else -> current
-        }
-        lastIndex = state.index
-        lastQueueJson = MusicTrack.listToJson(reordered)
-        publishQueueEdited()
     }
 
     /** Clears the queue except the current track, which keeps playing. */
