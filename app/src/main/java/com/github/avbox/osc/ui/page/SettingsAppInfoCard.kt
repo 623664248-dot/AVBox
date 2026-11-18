@@ -1,5 +1,6 @@
 package com.github.avbox.osc.ui.page
 
+import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -7,6 +8,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -30,7 +32,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.Font
@@ -83,6 +88,33 @@ private fun rememberCalligraphyFamily(): FontFamily {
 }
 
 /**
+ * The ink-wash artwork behind the brand card (v1.35.4):
+ * a text-free shuimo texture (ink splashes top-right and
+ * along the bottom, clean paper on the left for the name),
+ * generated to match the mockup Torres picked. It ships
+ * as a base64 asset for the same reason as the font —
+ * the push tool rejects binaries — and is decoded once
+ * into a bitmap. Null on any failure: the card then
+ * falls back to the plain paper colour.
+ */
+@Composable
+private fun rememberInkTexture(): ImageBitmap? {
+    val context = LocalContext.current
+    return remember {
+        try {
+            val b64 = context.assets.open("jingfeiyang_ink.b64")
+                .bufferedReader()
+                .readText()
+                .replace(Regex("\\s"), "")
+            val bytes = Base64.decode(b64, Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        } catch (t: Throwable) {
+            null
+        }
+    }
+}
+
+/**
  * The 我的 page header card (v1.35.0): Torres asked for his
  * own mark instead of the upstream AudioVideoBox card, and
  * picked the ink-calligraphy design from the mockups — his
@@ -109,30 +141,42 @@ private fun rememberCalligraphyFamily(): FontFamily {
  * darker, and a wide ink band sweeps across the whole
  * card every ~5.6 s — motion nobody can miss, and a
  * visible signature of the new build.
+ * v1.35.4: Torres compared the app card against the
+ * mockup video side by side — 「不一样」: the app card
+ * was nearly blank paper while the mockup is covered
+ * in ink splashes, feibai streaks and splatter. The
+ * card now carries a real text-free ink artwork as its
+ * background (base64 asset, decoded once), slowly
+ * panned so the texture itself moves; the calligraphy,
+ * tagline and seal stay real text on top, and the
+ * sweeping band from v1.35.3 remains.
  */
 @Composable
 internal fun AppInfoHeaderCard() {
     val calligraphy = rememberCalligraphyFamily()
+    val inkTexture = rememberInkTexture()
     val anim = rememberInfiniteTransition(label = "inkCard")
-    // Blob drift, in dp, applied via Modifier.offset
-    // (layout) — read in composition on purpose (v1.35.3).
-    val drift by anim.animateFloat(
-        initialValue = -16f,
-        targetValue = 16f,
+    // Slow pan of the ink artwork itself (v1.35.4), in dp,
+    // applied via Modifier.offset — the texture's hard
+    // splatter edges make even a few dp of travel plainly
+    // visible, unlike the old soft-gradient drift.
+    val panX by anim.animateFloat(
+        initialValue = -10f,
+        targetValue = 10f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 9000),
+            animation = tween(durationMillis = 12000),
             repeatMode = RepeatMode.Reverse,
         ),
-        label = "inkDriftX",
+        label = "inkPanX",
     )
-    val inkPulse by anim.animateFloat(
-        initialValue = 0.16f,
-        targetValue = 0.26f,
+    val panY by anim.animateFloat(
+        initialValue = -4f,
+        targetValue = 4f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 6000),
+            animation = tween(durationMillis = 15000),
             repeatMode = RepeatMode.Reverse,
         ),
-        label = "inkPulse",
+        label = "inkPanY",
     )
     // Sweep: crosses the card in the first 1.8 s of each
     // 5.6 s cycle, then rests off-card (v1.35.3).
@@ -160,34 +204,35 @@ internal fun AppInfoHeaderCard() {
         // Ink layer (v1.35.1): matchParentSize keeps the
         // decorations from sizing the card.
         Box(modifier = Modifier.matchParentSize()) {
-            Box(
-                modifier = Modifier
-                    .size(220.dp)
-                    .align(Alignment.TopEnd)
-                    .offset(x = (30f + drift).dp, y = (-70).dp)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(
-                                InkColor.copy(alpha = inkPulse),
-                                Color.Transparent,
+            // The ink artwork (v1.35.4) replaces the two
+            // procedural gradient blobs: drawn 15% oversize
+            // and slowly panned, so its edges never show.
+            if (inkTexture != null) {
+                Image(
+                    bitmap = inkTexture,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .fillMaxWidth(1.15f)
+                        .fillMaxHeight(1.15f)
+                        .offset(x = panX.dp, y = panY.dp),
+                )
+                // A faint paper veil on the left keeps the
+                // calligraphy readable over the texture.
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(
+                                    PaperColor.copy(alpha = 0.34f),
+                                    PaperColor.copy(alpha = 0f),
+                                ),
                             ),
                         ),
-                    ),
-            )
-            Box(
-                modifier = Modifier
-                    .size(180.dp)
-                    .align(Alignment.BottomStart)
-                    .offset(x = (-40f - drift).dp, y = 60.dp)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(
-                                InkColor.copy(alpha = inkPulse * 0.7f),
-                                Color.Transparent,
-                            ),
-                        ),
-                    ),
-            )
+                )
+            }
             // The sweeping ink band (v1.35.3): a soft dark
             // band, tilted like a brush stroke, travelling
             // the full width of the card.
