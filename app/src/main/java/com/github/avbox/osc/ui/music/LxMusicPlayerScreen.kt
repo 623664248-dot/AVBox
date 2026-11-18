@@ -162,21 +162,13 @@ fun LxMusicPlayerScreen(
             .windowInsetsPadding(WindowInsets.statusBars)
             .padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
-        // Header row: back only. The sleep-timer and appearance
+        // No header row at all: the sleep-timer and appearance
         // buttons moved down into the favourite/download row in
-        // v1.29.0 (Torres's request), so the top stays clean.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_arrow_left),
-                    contentDescription = stringResource(R.string.common_back),
-                    tint = Color.White,
-                )
-            }
-        }
+        // v1.29.0, and the back button was removed in v1.29.1 —
+        // both at Torres's request. The page is exited with the
+        // system back key/gesture (the Activity finishes as
+        // before); the onBack parameter is now unused by this
+        // Screen and stays only so the call site is unchanged.
 
         // Big cover area; the square takes whatever room is left
         // between the fixed rows, capped by the narrower dimension.
