@@ -116,7 +116,7 @@ fun LxMusicPlayerScreen(
     onEqCustomLevelsChanged: (List<Int>) -> Unit = {},
     onToggleLoopMode: () -> Unit = {},
     onRemoveQueueItem: (Int) -> Unit = {},
-    onMoveQueueItem: (Int, Int) -> Unit = {},
+    onMoveQueueItem: (Int, Int) -> Unit = { _, _ -> },
     onClearQueue: () -> Unit = {},
     onToggleFavorite: () -> Unit = {},
     onDownload: () -> Unit = {},
