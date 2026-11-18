@@ -7,11 +7,18 @@ package com.github.avbox.osc.ui.music
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -71,12 +78,19 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -101,6 +115,9 @@ fun LxMusicPlayerScreen(
     onEqModeSelected: (String) -> Unit = {},
     onEqCustomLevelsChanged: (List<Int>) -> Unit = {},
     onToggleLoopMode: () -> Unit = {},
+    onRemoveQueueItem: (Int) -> Unit = {},
+    onMoveQueueItem: (Int, Int) -> Unit = {},
+    onClearQueue: () -> Unit = {},
     onToggleFavorite: () -> Unit = {},
     onDownload: () -> Unit = {},
     onMuteToggle: () -> Unit = {},
@@ -565,52 +582,15 @@ fun LxMusicPlayerScreen(
     }
 
     if (state.showQueue) {
-        Dialog(onDismissRequest = onToggleQueue) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.7f),
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = stringResource(R.string.music_queue),
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(bottom = 12.dp),
-                    )
-                    LazyColumn {
-                        itemsIndexed(state.queue, key = { index, _ -> index }) { index, item ->
-                            val isCurrent = index == state.index
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onSelectQueueItem(index) }
-                                    .padding(vertical = 10.dp),
-                            ) {
-                                Text(
-                                    text = item.name,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = if (isCurrent) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurface
-                                    },
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    text = item.singer,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        QueueDialog(
+            state = state,
+            onDismiss = onToggleQueue,
+            onSelect = onSelectQueueItem,
+            onToggleLoopMode = onToggleLoopMode,
+            onRemove = onRemoveQueueItem,
+            onMove = onMoveQueueItem,
+            onClear = onClearQueue,
+        )
     }
 }
 
@@ -1292,4 +1272,255 @@ private fun formatTimeMs(ms: Long): String {
     val m = totalSec / 60
     val s = totalSec % 60
     return m.toString().padStart(2, '0') + ":" + s.toString().padStart(2, '0')
+}
+
+/**
+ * Play queue dialog (v1.30.0, modelled on the QQ Music panel
+ * Torres screenshotted): a header with the queue size, a toolbar
+ * row carrying the loop mode (tap cycles it, same handler as the
+ * transport row's button) and a clear button, then one row per
+ * track — title and singer on a single line, the current track in
+ * the primary colour with animated bars while it plays, a remove
+ * cross per row, and a drag handle that reorders on release.
+ * Clearing keeps the current track: stopping the playing song as
+ * a side effect of tidying the list is a worse surprise.
+ */
+@Composable
+private fun QueueDialog(
+    state: LxPlayerState,
+    onDismiss: () -> Unit,
+    onSelect: (Int) -> Unit,
+    onToggleLoopMode: () -> Unit,
+    onRemove: (Int) -> Unit,
+    onMove: (Int, Int) -> Unit,
+    onClear: () -> Unit,
+) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(Unit) {
+        if (state.index > 0) listState.scrollToItem(state.index)
+    }
+    var dragIndex by remember { mutableStateOf(-1) }
+    var dragOffsetPx by remember { mutableStateOf(0f) }
+    val rowHeightPx = with(LocalDensity.current) { 56.dp.toPx() }
+    val primary = MaterialTheme.colorScheme.primary
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.75f),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = stringResource(R.string.music_queue) +
+                        " \u00b7 " + state.queue.size,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .clickable { onToggleLoopMode() }
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            painter = painterResource(loopModeIcon(state.loopMode)),
+                            contentDescription = stringResource(state.loopMode.labelRes),
+                            modifier = Modifier.size(20.dp),
+                            tint = onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(state.loopMode.labelRes),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = onClear) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_delete),
+                            contentDescription = stringResource(R.string.common_delete),
+                            tint = onSurfaceVariant,
+                        )
+                    }
+                }
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    itemsIndexed(
+                        state.queue,
+                        key = { index, _ -> index },
+                    ) { index, item ->
+                        val isCurrent = index == state.index
+                        val dragging = index == dragIndex
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .then(
+                                    if (dragging) {
+                                        Modifier
+                                            .zIndex(1f)
+                                            .graphicsLayer {
+                                                translationY = dragOffsetPx
+                                            }
+                                            .background(
+                                                MaterialTheme.colorScheme
+                                                    .surfaceVariant,
+                                            )
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .padding(horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = buildAnnotatedString {
+                                    withStyle(
+                                        SpanStyle(
+                                            color = if (isCurrent) {
+                                                primary
+                                            } else {
+                                                onSurface
+                                            },
+                                            fontWeight = if (isCurrent) {
+                                                FontWeight.Bold
+                                            } else {
+                                                FontWeight.Normal
+                                            },
+                                        ),
+                                    ) {
+                                        append(item.name)
+                                    }
+                                    if (item.singer.isNotEmpty()) {
+                                        withStyle(
+                                            SpanStyle(color = onSurfaceVariant),
+                                        ) {
+                                            append(" - " + item.singer)
+                                        }
+                                    }
+                                },
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { onSelect(index) }
+                                    .padding(vertical = 8.dp),
+                            )
+                            if (isCurrent && state.playing) {
+                                PlayingBars()
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            IconButton(
+                                onClick = { onRemove(index) },
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    painter = painterResource(
+                                        R.drawable.player_ic_close,
+                                    ),
+                                    contentDescription = stringResource(
+                                        R.string.common_delete,
+                                    ),
+                                    modifier = Modifier.size(18.dp),
+                                    tint = onSurfaceVariant,
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .pointerInput(index) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = {
+                                                dragIndex = index
+                                                dragOffsetPx = 0f
+                                            },
+                                            onDrag = { change, dragAmount ->
+                                                change.consume()
+                                                dragOffsetPx += dragAmount.y
+                                            },
+                                            onDragEnd = {
+                                                val steps =
+                                                    (dragOffsetPx / rowHeightPx)
+                                                        .roundToInt()
+                                                val target = (index + steps)
+                                                    .coerceIn(
+                                                        0,
+                                                        state.queue.size - 1,
+                                                    )
+                                                dragIndex = -1
+                                                dragOffsetPx = 0f
+                                                if (target != index) {
+                                                    onMove(index, target)
+                                                }
+                                            },
+                                            onDragCancel = {
+                                                dragIndex = -1
+                                                dragOffsetPx = 0f
+                                            },
+                                        )
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    painter = painterResource(
+                                        R.drawable.ic_music_queue,
+                                    ),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Animated equaliser bars marking the playing row in the queue. */
+@Composable
+private fun PlayingBars() {
+    val transition = rememberInfiniteTransition(label = "queuePlayingBars")
+    Row(
+        modifier = Modifier.height(14.dp),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        for (i in 0 until 4) {
+            val barHeight by transition.animateFloat(
+                initialValue = 4f,
+                targetValue = 14f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(
+                        durationMillis = 280 + i * 60,
+                        easing = LinearEasing,
+                    ),
+                    repeatMode = RepeatMode.Reverse,
+                    initialStartOffset = StartOffset(i * 90),
+                ),
+                label = "queueBar$i",
+            )
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(barHeight.dp)
+                    .background(
+                        MaterialTheme.colorScheme.primary,
+                        RoundedCornerShape(1.dp),
+                    ),
+            )
+        }
+    }
 }

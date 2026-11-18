@@ -459,6 +459,9 @@ class LxMusicPlayerActivity : BaseActivity() {
                             ensureEffects()
                         },
                         onToggleLoopMode = { toggleLoopMode() },
+                        onRemoveQueueItem = { i -> removeQueueItem(i) },
+                        onMoveQueueItem = { from, to -> moveQueueItem(from, to) },
+                        onClearQueue = { clearQueue() },
                         onToggleFavorite = { toggleFavorite() },
                         onDownload = { downloadCurrent() },
                         onMuteToggle = { toggleMute() },
@@ -1381,6 +1384,81 @@ class LxMusicPlayerActivity : BaseActivity() {
             next = Random.nextInt(size)
         }
         return next
+    }
+
+    // ------------------------------------------------------- queue editing
+
+    /**
+     * Queue edits from the queue dialog (v1.30.0): this Activity
+     * is the queue owner, so every mutation lands here — the list,
+     * the current index, the remembered queue JSON and the
+     * mini-bar record are updated together.
+     */
+    private fun removeQueueItem(target: Int) {
+        val queue = state.queue
+        if (target !in queue.indices || queue.size <= 1) return
+        val wasCurrent = target == state.index
+        state.queue = queue.toMutableList().also { it.removeAt(target) }
+        if (target < state.index) {
+            state.index -= 1
+            lastIndex = state.index
+        }
+        lastQueueJson = MusicTrack.listToJson(state.queue)
+        if (wasCurrent) {
+            // Play whatever slid into the removed slot (the new
+            // last track when the tail was removed).
+            playAt(state.index.coerceAtMost(state.queue.size - 1))
+        } else {
+            publishQueueEdited()
+        }
+    }
+
+    private fun moveQueueItem(from: Int, to: Int) {
+        val queue = state.queue
+        if (from !in queue.indices || to !in queue.indices || from == to) return
+        val reordered = queue.toMutableList()
+        reordered.add(to, reordered.removeAt(from))
+        state.queue = reordered
+        val current = state.index
+        state.index = when {
+            current == from -> to
+            from < to && current in (from + 1)..to -> current - 1
+            from > to && current in to until from -> current + 1
+            else -> current
+        }
+        lastIndex = state.index
+        lastQueueJson = MusicTrack.listToJson(reordered)
+        publishQueueEdited()
+    }
+
+    /** Clears the queue except the current track, which keeps playing. */
+    private fun clearQueue() {
+        val current = state.current ?: return
+        if (state.queue.size <= 1) return
+        state.queue = listOf(current)
+        state.index = 0
+        lastIndex = 0
+        lastQueueJson = MusicTrack.listToJson(state.queue)
+        publishQueueEdited()
+    }
+
+    /**
+     * Re-publishes the mini-bar record after a queue edit that did
+     * not change the current track, so the record's queue copy (and
+     * its can-next / can-prev flags) stays truthful.
+     */
+    private fun publishQueueEdited() {
+        val current = state.current ?: return
+        val info = NowPlayingState.current() ?: return
+        if (info.trackKey != NowPlayingState.keyOf(current)) return
+        NowPlayingState.publish(
+            info.copy(
+                queueJson = MusicTrack.listToJson(state.queue),
+                queueIndex = state.index,
+                canNext = canNextFromHere(),
+                canPrev = canPrevFromHere(),
+            ),
+        )
     }
 
     private fun toggleLoopMode() {
