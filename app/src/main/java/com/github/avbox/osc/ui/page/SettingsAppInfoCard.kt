@@ -91,37 +91,57 @@ private fun rememberCalligraphyFamily(): FontFamily {
  * over twice its height and the drift invisible — the
  * ink blobs now live in a matchParentSize layer and
  * drift wider and deeper.
+ * v1.35.2: his recording showed the height fixed but
+ * the wash still frozen — the drift had been written
+ * in raw pixels (~9 dp of travel). It is now computed
+ * in dp, and the blobs also scale-breathe against each
+ * other so the motion is unmistakable.
  */
 @Composable
 internal fun AppInfoHeaderCard() {
     val calligraphy = rememberCalligraphyFamily()
     val driftTransition = rememberInfiniteTransition(label = "inkDrift")
+    // Drift values are in dp (v1.35.2): graphicsLayer
+    // translations are raw pixels, and v1.35.1's ±26 px was
+    // only ~9 dp on Torres's high-density screen — on a soft
+    // radial wash that is effectively invisible, as his
+    // recording proved. The graphicsLayer block converts
+    // dp to px itself (its scope is a Density).
     val drift by driftTransition.animateFloat(
-        initialValue = -26f,
-        targetValue = 26f,
+        initialValue = -30f,
+        targetValue = 30f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 6500),
+            animation = tween(durationMillis = 8000),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "inkDriftX",
     )
     val driftY by driftTransition.animateFloat(
-        initialValue = -16f,
-        targetValue = 16f,
+        initialValue = -10f,
+        targetValue = 10f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 8200),
+            animation = tween(durationMillis = 10000),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "inkDriftY",
     )
     val inkPulse by driftTransition.animateFloat(
-        initialValue = 0.10f,
-        targetValue = 0.20f,
+        initialValue = 0.14f,
+        targetValue = 0.24f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 5000),
+            animation = tween(durationMillis = 6000),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "inkPulse",
+    )
+    val inkScale by driftTransition.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.12f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 7000),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "inkScale",
     )
     Box(
         modifier = Modifier
@@ -138,11 +158,13 @@ internal fun AppInfoHeaderCard() {
         Box(modifier = Modifier.matchParentSize()) {
             Box(
                 modifier = Modifier
-                    .size(240.dp)
+                    .size(220.dp)
                     .align(Alignment.TopEnd)
                     .graphicsLayer {
-                        translationX = 40f + drift
-                        translationY = -90f + driftY
+                        translationX = 30.dp.toPx() + drift.dp.toPx()
+                        translationY = (-70).dp.toPx() + driftY.dp.toPx()
+                        scaleX = inkScale
+                        scaleY = inkScale
                     }
                     .background(
                         Brush.radialGradient(
@@ -155,11 +177,13 @@ internal fun AppInfoHeaderCard() {
             )
             Box(
                 modifier = Modifier
-                    .size(200.dp)
+                    .size(180.dp)
                     .align(Alignment.BottomStart)
                     .graphicsLayer {
-                        translationX = -50f - drift
-                        translationY = 70f - driftY
+                        translationX = (-40).dp.toPx() - drift.dp.toPx()
+                        translationY = 60.dp.toPx() - driftY.dp.toPx()
+                        scaleX = 2.04f - inkScale
+                        scaleY = 2.04f - inkScale
                     }
                     .background(
                         Brush.radialGradient(
