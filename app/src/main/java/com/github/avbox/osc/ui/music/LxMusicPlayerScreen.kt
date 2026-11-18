@@ -162,6 +162,9 @@ fun LxMusicPlayerScreen(
             .windowInsetsPadding(WindowInsets.statusBars)
             .padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
+        // Header row: back only. The sleep-timer and appearance
+        // buttons moved down into the favourite/download row in
+        // v1.29.0 (Torres's request), so the top stays clean.
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -170,36 +173,6 @@ fun LxMusicPlayerScreen(
                 Icon(
                     painter = painterResource(R.drawable.ic_arrow_left),
                     contentDescription = stringResource(R.string.common_back),
-                    tint = Color.White,
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            if (state.sleepTimerEndAtMs > 0L) {
-                Text(
-                    text = stringResource(
-                        R.string.music_sleep_remaining,
-                        state.sleepMinutesLeft,
-                    ),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.padding(end = 2.dp),
-                )
-            }
-            IconButton(onClick = { sleepSheetOpen = true }) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_sleep_timer),
-                    contentDescription = stringResource(R.string.music_sleep_timer),
-                    tint = if (state.sleepTimerEndAtMs > 0L) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        Color.White
-                    },
-                )
-            }
-            IconButton(onClick = { appearanceOpen = true }) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_settings_theme),
-                    contentDescription = stringResource(R.string.music_appearance),
                     tint = Color.White,
                 )
             }
@@ -335,7 +308,9 @@ fun LxMusicPlayerScreen(
                 .height(68.dp),
         )
 
-        // Favourite + download, spread across the row.
+        // Favourite, download, mute, sleep timer and appearance,
+        // spread across the row (the last two moved down from the
+        // header row in v1.29.0, Torres's request).
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -427,6 +402,50 @@ fun LxMusicPlayerScreen(
                             R.string.music_mute
                         },
                     ),
+                    modifier = Modifier.size(26.dp),
+                    tint = Color.White.copy(alpha = 0.9f),
+                )
+            }
+            // Sleep timer (moved down from the header in v1.29.0):
+            // while a timer is running, the remaining-minutes label
+            // rides along next to the clock and the icon lights up
+            // in the primary colour, as it did at the top.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (state.sleepTimerEndAtMs > 0L) {
+                    Text(
+                        text = stringResource(
+                            R.string.music_sleep_remaining,
+                            state.sleepMinutesLeft,
+                        ),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.padding(end = 2.dp),
+                    )
+                }
+                IconButton(
+                    onClick = { sleepSheetOpen = true },
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_sleep_timer),
+                        contentDescription = stringResource(R.string.music_sleep_timer),
+                        modifier = Modifier.size(26.dp),
+                        tint = if (state.sleepTimerEndAtMs > 0L) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            Color.White.copy(alpha = 0.9f)
+                        },
+                    )
+                }
+            }
+            // Appearance (also moved down from the header in v1.29.0).
+            IconButton(
+                onClick = { appearanceOpen = true },
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_settings_theme),
+                    contentDescription = stringResource(R.string.music_appearance),
                     modifier = Modifier.size(26.dp),
                     tint = Color.White.copy(alpha = 0.9f),
                 )
