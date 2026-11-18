@@ -103,6 +103,7 @@ fun LxMusicPlayerScreen(
     onToggleLoopMode: () -> Unit = {},
     onToggleFavorite: () -> Unit = {},
     onDownload: () -> Unit = {},
+    onMuteToggle: () -> Unit = {},
     onSleepTimerSelected: (Int) -> Unit = {},
 ) {
     val track = state.current
@@ -406,6 +407,29 @@ fun LxMusicPlayerScreen(
                         }
                     }
                 }
+            }
+            // Mute toggle (v1.26.0, Torres's request): volume 0 on
+            // both players until tapped again; the icon swaps to
+            // the crossed-out speaker while muted.
+            IconButton(onClick = onMuteToggle, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    painter = painterResource(
+                        if (state.muted) {
+                            R.drawable.ic_volume_off
+                        } else {
+                            R.drawable.player_ic_volume
+                        },
+                    ),
+                    contentDescription = stringResource(
+                        if (state.muted) {
+                            R.string.music_unmute
+                        } else {
+                            R.string.music_mute
+                        },
+                    ),
+                    modifier = Modifier.size(26.dp),
+                    tint = Color.White.copy(alpha = 0.9f),
+                )
             }
         }
 

@@ -341,6 +341,10 @@ class LxMusicPlayerActivity : BaseActivity() {
             playNextManual()
         }
 
+        override fun prev() {
+            if (state.index > 0) playAt(state.index - 1)
+        }
+
         override fun stop() {
             resolveJob?.cancel()
             try {
@@ -457,6 +461,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                         onToggleLoopMode = { toggleLoopMode() },
                         onToggleFavorite = { toggleFavorite() },
                         onDownload = { downloadCurrent() },
+                        onMuteToggle = { toggleMute() },
                         onSleepTimerSelected = { minutes -> applySleepTimer(minutes) },
                     )
                 }
@@ -1200,6 +1205,7 @@ class LxMusicPlayerActivity : BaseActivity() {
      */
     private suspend fun startPlayback(track: MusicTrack, url: String) {
         val item = NowPlayingState.mediaItemFor(track, url)
+        applyMute()
         val target = awaitActivePlayer()
         val serviceTarget = target != null && target === servicePlayer
         // Publish the mini-bar record before the hand-off: a service
@@ -1214,6 +1220,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                 sourceLabel = state.sourceLabel,
                 isPlaying = true,
                 canNext = canNextFromHere(),
+                canPrev = canPrevFromHere(),
                 serviceBacked = serviceTarget,
                 queueJson = MusicTrack.listToJson(state.queue),
                 queueIndex = state.index,
@@ -1253,6 +1260,41 @@ class LxMusicPlayerActivity : BaseActivity() {
         val size = state.queue.size
         if (size <= 1) return false
         return !(state.loopMode == LxLoopMode.ORDER && state.index >= size - 1)
+    }
+
+    /** Manual-previous availability of the current queue position. */
+    private fun canPrevFromHere(): Boolean {
+        val size = state.queue.size
+        if (size <= 1) return false
+        return !(state.loopMode == LxLoopMode.ORDER && state.index <= 0)
+    }
+
+    // ---------------------------------------------------------- mute
+
+    /** Player-page mute toggle (v1.26.0, Torres's request). */
+    private fun toggleMute() {
+        state.muted = !state.muted
+        applyMute()
+    }
+
+    /**
+     * Applies [LxPlayerState.muted] to both players. Volume is a
+     * player-level setting, so it survives track changes; it is
+     * re-applied at every startPlayback because the service player
+     * can be (re)created by a rebind after the toggle.
+     */
+    private fun applyMute() {
+        val volume = if (state.muted) 0f else 1f
+        try {
+            player?.volume = volume
+        } catch (t: Throwable) {
+            // player gone; the next startPlayback re-applies
+        }
+        try {
+            servicePlayer?.volume = volume
+        } catch (t: Throwable) {
+            // service gone; the next startPlayback re-applies
+        }
     }
 
     // ------------------------------------------------------ sleep timer

@@ -43,6 +43,8 @@ object NowPlayingState {
         val isPlaying: Boolean,
         /** Whether a manual "next" from the mini bar can advance. */
         val canNext: Boolean,
+        /** Whether a manual "previous" from the mini bar can go back. */
+        val canPrev: Boolean = true,
         /** True: LxPlaybackService owns playback. False: local player. */
         val serviceBacked: Boolean,
         /** The queue the current track belongs to (MusicTrack JSON). */
@@ -58,6 +60,7 @@ object NowPlayingState {
     interface LocalControls {
         fun playPause()
         fun next()
+        fun prev()
         fun stop()
     }
 

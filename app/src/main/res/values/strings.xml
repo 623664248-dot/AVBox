@@ -388,6 +388,10 @@
     <string name="theme_current_color">当前颜色</string>
     <string name="music_episodes">音乐选集</string>
     <string name="music_previous">上一首</string>
+    <string name="music_mute">静音</string>
+    <string name="music_unmute">取消静音</string>
+    <string name="music_layout_grid">平铺</string>
+    <string name="music_layout_list">列表</string>
     <string name="music_next">下一首</string>
 
     <string name="search_home_poster">海报样式</string>

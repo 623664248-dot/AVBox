@@ -170,6 +170,7 @@ fun MusicPage(
     val pyClasses by vm.pyClasses.collectAsStateWithLifecycle()
     val selectedPyClass by vm.selectedPyClass.collectAsStateWithLifecycle()
     val pyItems by vm.pyItems.collectAsStateWithLifecycle()
+    val pyTileGrid by vm.pyTileGrid.collectAsStateWithLifecycle()
     val pyLoading by vm.pyLoading.collectAsStateWithLifecycle()
     val pyLoadingMore by vm.pyLoadingMore.collectAsStateWithLifecycle()
     val pySearchActive by vm.pySearchActive.collectAsStateWithLifecycle()
@@ -625,6 +626,8 @@ fun MusicPage(
                         listState = pyListState,
                         gridState = pyGridState,
                         searchActive = pySearchActive,
+                        tileGrid = pyTileGrid,
+                        onToggleLayout = { vm.togglePyTileGrid() },
                         singerGrid = !pySearchActive &&
                             pyClasses.firstOrNull { it.id == selectedPyClass }
                                 ?.name?.let(::isSingerClassName) == true,
@@ -807,6 +810,32 @@ fun MusicPage(
                         } else {
                             try {
                                 NowPlayingState.localControls?.next()
+                            } catch (t: Throwable) {
+                                // a dead session must not break the page
+                            }
+                        }
+                    },
+                    onPrev = {
+                        if (np.serviceBacked) {
+                            val player = MusicServiceConnection.connectedPlayer()
+                            if (player != null && np.canPrev) {
+                                barScope.launch {
+                                    val queue = MusicTrack.listFromJson(np.queueJson)
+                                    val prev = barPrevIndex(queue.size, np.queueIndex)
+                                    if (prev != null &&
+                                        !playBarTrack(context, player, queue, prev)
+                                    ) {
+                                        Toast.makeText(
+                                            context,
+                                            R.string.music_resolve_failed,
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                }
+                            }
+                        } else {
+                            try {
+                                NowPlayingState.localControls?.prev()
                             } catch (t: Throwable) {
                                 // a dead session must not break the page
                             }
@@ -1510,6 +1539,8 @@ private fun PySpiderContent(
     gridState: LazyGridState,
     searchActive: Boolean,
     singerGrid: Boolean,
+    tileGrid: Boolean,
+    onToggleLayout: () -> Unit,
     onClearSearch: () -> Unit,
     onLoadMore: () -> Unit,
     onItemClick: (MusicTrack) -> Unit,
@@ -1526,7 +1557,7 @@ private fun PySpiderContent(
     // `loadingMore` and never trips this.
     LaunchedEffect(loading) {
         if (loading) {
-            if (singerGrid) {
+            if (singerGrid || tileGrid) {
                 gridState.scrollToItem(0)
             } else {
                 listState.scrollToItem(0)
@@ -1534,21 +1565,53 @@ private fun PySpiderContent(
         }
     }
     Column(modifier = Modifier.fillMaxSize()) {
-        if (searchActive) {
+        if (searchActive || !singerGrid) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = stringResource(R.string.music_tab_search),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (searchActive) {
+                    Text(
+                        text = stringResource(R.string.music_tab_search),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = onClearSearch) {
-                    Text(stringResource(R.string.music_py_back_category))
+                if (searchActive) {
+                    TextButton(onClick = onClearSearch) {
+                        Text(stringResource(R.string.music_py_back_category))
+                    }
+                }
+                // Layout toggle (v1.26.0): rows ⇄ cover tiles.
+                // Singer classes keep their avatar grid and never
+                // see this button.
+                if (!singerGrid) {
+                    IconButton(
+                        onClick = onToggleLayout,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(
+                                if (tileGrid) {
+                                    R.drawable.ic_view_list
+                                } else {
+                                    R.drawable.ic_view_grid
+                                },
+                            ),
+                            contentDescription = stringResource(
+                                if (tileGrid) {
+                                    R.string.music_layout_list
+                                } else {
+                                    R.string.music_layout_grid
+                                },
+                            ),
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
@@ -1590,6 +1653,55 @@ private fun PySpiderContent(
                                     LaunchedEffect(index) { onLoadMore() }
                                 }
                                 PySingerCell(
+                                    track = track,
+                                    onClick = { onItemClick(track) },
+                                )
+                            }
+                            if (loadingMore) {
+                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else if (tileGrid) {
+                        // Cover tiles (v1.26.0): portrait 3:4 cells
+                        // like the TVBox shells render vod posters —
+                        // the layout Torres pointed at for audiobook
+                        // sources. Same scroll-gated load-more and
+                        // 播放全部 span as the other containers.
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
+                            state = gridState,
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp),
+                        ) {
+                            if (onPlayAll != null) {
+                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                    PlayAllButton(onClick = onPlayAll)
+                                }
+                            }
+                            itemsIndexed(
+                                items,
+                                key = { index, _ -> index },
+                            ) { index, track ->
+                                if (index >= items.size - 5 &&
+                                    (gridState.firstVisibleItemIndex > 0 ||
+                                        gridState.firstVisibleItemScrollOffset > 0)
+                                ) {
+                                    LaunchedEffect(index) { onLoadMore() }
+                                }
+                                PyTileCell(
                                     track = track,
                                     onClick = { onItemClick(track) },
                                 )
@@ -1706,6 +1818,46 @@ private fun PySingerCell(track: MusicTrack, onClick: () -> Unit) {
                 .fillMaxWidth()
                 .padding(top = 6.dp),
         )
+    }
+}
+
+/**
+ * One cell of the tile layout (v1.26.0): a portrait 3:4 cover over
+ * the title (up to two lines) and the singer / author line. Taps go
+ * through the same handler as the list rows.
+ */
+@Composable
+private fun PyTileCell(track: MusicTrack, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+    ) {
+        AsyncImage(
+            model = track.img,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(3f / 4f)
+                .clip(RoundedCornerShape(8.dp)),
+        )
+        Text(
+            text = track.name,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        if (track.singer.isNotEmpty()) {
+            Text(
+                text = track.singer,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -2325,6 +2477,7 @@ private fun MiniPlayerBar(
     onBodyClick: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
+    onPrev: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -2364,6 +2517,16 @@ private fun MiniPlayerBar(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+            IconButton(
+                onClick = onPrev,
+                enabled = controlsEnabled && info.canPrev,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.player_ic_prev),
+                    contentDescription = stringResource(R.string.music_previous),
+                    tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
             IconButton(onClick = onPlayPause, enabled = controlsEnabled) {
@@ -2416,6 +2579,33 @@ private fun barLoopMode(): LxLoopMode {
 private fun barCanNext(size: Int, index: Int): Boolean {
     if (size <= 1) return false
     return !(barLoopMode() == LxLoopMode.ORDER && index >= size - 1)
+}
+
+/** Manual-previous availability for the mini bar (v1.26.0). */
+private fun barCanPrev(size: Int, index: Int): Boolean {
+    if (size <= 1) return false
+    return !(barLoopMode() == LxLoopMode.ORDER && index <= 0)
+}
+
+/** Previous queue index for the mini bar, mirroring barNextIndex. */
+private fun barPrevIndex(size: Int, index: Int): Int? {
+    if (size <= 0) return null
+    return when (barLoopMode()) {
+        LxLoopMode.SHUFFLE -> {
+            if (size <= 1) {
+                index
+            } else {
+                var prev = Random.nextInt(size)
+                while (prev == index) {
+                    prev = Random.nextInt(size)
+                }
+                prev
+            }
+        }
+
+        LxLoopMode.ORDER -> if (index > 0) index - 1 else null
+        else -> (index - 1 + size) % size
+    }
 }
 
 /** Next queue index for the mini bar, mirroring the player page. */
@@ -2493,6 +2683,7 @@ private suspend fun playBarTrack(
                 sourceLabel = barSourceLabel(context, track),
                 isPlaying = true,
                 canNext = barCanNext(queue.size, index),
+                canPrev = barCanPrev(queue.size, index),
                 serviceBacked = true,
                 queueJson = MusicTrack.listToJson(queue),
                 queueIndex = index,

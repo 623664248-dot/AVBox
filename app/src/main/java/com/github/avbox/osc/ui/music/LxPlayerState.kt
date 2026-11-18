@@ -70,6 +70,9 @@ class LxPlayerState {
     /** Whether the current track is in the user's favourites. */
     var isFavorite by mutableStateOf(false)
 
+    /** Player-page mute toggle (v1.26.0); volume lives on the players. */
+    var muted by mutableStateOf(false)
+
     /** Resolved direct URL of the current track (null while resolving). */
     var currentUrl by mutableStateOf<String?>(null)
 

@@ -206,6 +206,7 @@ class LxPlaybackService : Service() {
                     sourceLabel = existing?.sourceLabel ?: "",
                     isPlaying = exo?.isPlaying == true,
                     canNext = existing?.canNext ?: false,
+                    canPrev = existing?.canPrev ?: true,
                     serviceBacked = true,
                     queueJson = existing?.queueJson ?: "",
                     queueIndex = existing?.queueIndex ?: 0,
