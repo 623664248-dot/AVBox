@@ -114,6 +114,32 @@ data class MusicTrack(
         /** Source value prefix marking a track as belonging to a py spider. */
         const val PY_SOURCE_PREFIX = "py:"
 
+        /**
+         * HD rewrite of a cover URL (v1.24.0): the platform CDNs
+         * serve any size, but searches and spiders often hand out
+         * thumbnails (Kugou 240px, QQ 500px) that smear across the
+         * player page. Known patterns are upgraded to screen-sized
+         * variants (both verified live: Kugou stdmusic/1080 is a
+         * true 1080x1080, QQ R1200x1200 a true 1200x1200);
+         * anything else passes through untouched. Kuwo's
+         * albumcover path already returns the original image
+         * (1477x1477 measured) and NetEase picUrl is the original
+         * too, so neither is rewritten.
+         */
+        fun hiResCover(url: String?): String? {
+            if (url.isNullOrEmpty()) return url
+            var out = url
+            out = out.replace(
+                Regex("imge\\.kugou\\.com/stdmusic/\\d+/"),
+                "imge.kugou.com/stdmusic/1080/",
+            )
+            out = out.replace(
+                Regex("T002R\\d+x\\d+M000"),
+                "T002R1200x1200M000",
+            )
+            return out
+        }
+
         fun fromJson(obj: JSONObject): MusicTrack {
             val types = LinkedHashMap<String, String>()
             val typeObj = obj.optJSONObject("typeHashes")

@@ -170,7 +170,7 @@ object MusicApi {
             singer = decodeEntities(singer),
             albumName = decodeEntities(item.optString("album_name")),
             albumId = item.optString("album_id"),
-            img = img.replace("{size}", "240").takeIf { it.isNotEmpty() },
+            img = img.replace("{size}", "1080").takeIf { it.isNotEmpty() },
             durationSec = item.optInt("duration"),
             songmid = item.optString("audio_id"),
             hash = hash,
@@ -415,7 +415,7 @@ object MusicApi {
                 .ifEmpty { item.optString("albumname") },
             albumId = albumMid,
             img = if (albumMid.isNotEmpty()) {
-                "https://y.gtimg.cn/music/photo_new/T002R500x500M000" + albumMid + ".jpg"
+                "https://y.gtimg.cn/music/photo_new/T002R1200x1200M000" + albumMid + ".jpg"
             } else {
                 null
             },

@@ -132,10 +132,10 @@ fun LxMusicPlayerScreen(
         // colour sampled from the current cover, darkened, with a deep
         // blue-grey fallback and a soft bottom shade for readability.
         if (MusicAppearance.bgPath.isNotBlank()) {
-            MusicBackground(fallbackModel = track?.img)
+            MusicBackground(fallbackModel = MusicTrack.hiResCover(track?.img))
         } else if (albumPoster) {
-            MusicBackground(fallbackModel = track?.img)
-            AlbumPosterArt(model = track?.img)
+            MusicBackground(fallbackModel = MusicTrack.hiResCover(track?.img))
+            AlbumPosterArt(model = MusicTrack.hiResCover(track?.img))
         } else {
             Box(
                 modifier = Modifier
@@ -741,7 +741,7 @@ private fun AlbumCoverArt(
     ) {
         if (track?.img != null) {
             AsyncImage(
-                model = track.img,
+                model = MusicTrack.hiResCover(track.img),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -820,7 +820,7 @@ private fun VinylDisc(
         }
         if (track?.img != null) {
             AsyncImage(
-                model = track.img,
+                model = MusicTrack.hiResCover(track.img),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
