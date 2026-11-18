@@ -118,7 +118,7 @@ object LxBridge {
      * check their servers first) — use [awaitInited] for the source
      * registry.
      */
-    suspend fun loadScript(def: ScriptDef): ScriptInfo {
+    suspend fun loadScript(def: ScriptDef, force: Boolean = false): ScriptInfo {
         val context = AppContextHolder.context()
             ?: throw LxException("app context not ready")
         val raw = try {
@@ -137,6 +137,16 @@ object LxBridge {
         val scriptText = raw.removePrefix("\uFEFF")
         val info = parseScriptInfo(scriptText, def.fallbackName)
         withContext(dispatcher) {
+            // Already holding this script (app-start warm-up, or a
+            // py detour that never unloads the bridge): re-evaluating
+            // would tear down a healthy context and re-pay the
+            // script's whole init for nothing (v1.28.0). The manual
+            // refresh passes force = true and always reloads.
+            if (!force && loadedScriptId == def.id && scriptInfo != null &&
+                ctx != null && initedDeferred != null
+            ) {
+                return@withContext
+            }
             teardownLocked()
             val created = QuickJSContext.create()
             ctx = created
@@ -151,7 +161,7 @@ object LxBridge {
             loadedScriptId = def.id
             scriptInfo = info
         }
-        return info
+        return scriptInfo ?: info
     }
 
     /** Waits for the loaded script's send('inited') source registry. */

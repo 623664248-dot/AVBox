@@ -346,11 +346,11 @@ class MusicViewModel : ViewModel() {
      * fallback. On failure the platform list is cleared because the failed
      * load already tore the previous script's context down.
      */
-    private suspend fun initBridge(scriptId: String): Boolean {
+    private suspend fun initBridge(scriptId: String, force: Boolean = false): Boolean {
         val def = findDef(scriptId) ?: return false
         _scriptBusy.value = true
         return try {
-            val info = LxBridge.loadScript(def)
+            val info = LxBridge.loadScript(def, force)
             val registry = LxBridge.awaitInited()
             applyRegistry(registry)
             refreshScriptOptions(selectedId = def.id, info = info)
@@ -687,7 +687,7 @@ class MusicViewModel : ViewModel() {
         }
         val scriptId = LxBridge.loadedScriptId ?: return
         viewModelScope.launch {
-            if (initBridge(scriptId)) {
+            if (initBridge(scriptId, force = true)) {
                 if (lastKeyword.isNotEmpty() && _selectedSource.value.isNotEmpty()) {
                     search(lastKeyword)
                 }

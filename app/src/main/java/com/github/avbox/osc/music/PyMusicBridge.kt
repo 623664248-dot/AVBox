@@ -5,9 +5,15 @@ import com.github.avbox.osc.api.ApiConfig
 import com.github.avbox.osc.bean.SourceBean
 import com.github.catvod.crawler.Spider
 import com.github.catvod.crawler.SpiderReaper
+import com.github.avbox.osc.util.AppContextHolder
 import com.github.avbox.osc.util.BoundedCall
+import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.Callable
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -88,11 +94,39 @@ object PyMusicBridge {
     private val homeCache = HashMap<String, HomeResult>()
     private val categoryPage1Cache = HashMap<Pair<String, String>, ListResult>()
 
+    // Disk layer under the process cache (v1.28.0): home and
+    // category page-1 results also persist under filesDir, so a
+    // cold process paints from disk instantly instead of paying
+    // the spider — and the Python cold start — on every app
+    // launch. Disk data is served as-is; a background refresh (at
+    // most once per key per process) re-fetches live and updates
+    // memory + disk for the next entry. Book/song catalogues
+    // barely change between launches, and the manual long-press
+    // refresh (clearCacheFor) still forces live data.
+    private const val DISK_DIR = "py_music_cache"
+    private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val diskRefreshStarted = HashSet<String>()
+
     /** Drops one source's cached home / page-1 results (file replaced or deleted). */
     suspend fun clearCacheFor(slug: String) {
         serialized {
             homeCache.remove(slug)
             categoryPage1Cache.keys.removeAll { it.first == slug }
+            val context = AppContextHolder.context()
+            if (context != null) {
+                try {
+                    val dir = File(context.filesDir, DISK_DIR)
+                    dir.listFiles()?.forEach { file ->
+                        if (file.name.startsWith("home_" + safeKey(slug)) ||
+                            file.name.startsWith("cat_" + safeKey(slug) + "_")
+                        ) {
+                            file.delete()
+                        }
+                    }
+                } catch (t: Throwable) {
+                    // best-effort; stale disk data is served once at most
+                }
+            }
         }
     }
 
@@ -100,9 +134,42 @@ object PyMusicBridge {
 
     suspend fun home(context: Context, def: PyMusicSources.PyDef): HomeResult =
         serialized {
-            homeCache[def.id]
-                ?: homeLocked(context, def).also { homeCache[def.id] = it }
+            val memory = homeCache[def.id]
+            if (memory != null) {
+                memory
+            } else {
+                val disk = readDiskHome(context, def.id)
+                if (disk != null) {
+                    homeCache[def.id] = disk
+                    scheduleHomeRefresh(context, def)
+                    disk
+                } else {
+                    homeLocked(context, def).also {
+                        homeCache[def.id] = it
+                        writeDiskHome(context, def.id, it)
+                    }
+                }
+            }
         }
+
+    /** One background live re-fetch of a disk-served home per process. */
+    private fun scheduleHomeRefresh(context: Context, def: PyMusicSources.PyDef) {
+        synchronized(diskRefreshStarted) {
+            if (!diskRefreshStarted.add("home:" + def.id)) return
+        }
+        val appContext = context.applicationContext
+        refreshScope.launch {
+            try {
+                serialized {
+                    val fresh = homeLocked(appContext, def)
+                    homeCache[def.id] = fresh
+                    writeDiskHome(appContext, def.id, fresh)
+                }
+            } catch (t: Throwable) {
+                // keep serving the disk copy
+            }
+        }
+    }
 
     private suspend fun homeLocked(context: Context, def: PyMusicSources.PyDef): HomeResult =
         withContext(Dispatchers.IO) {
@@ -132,11 +199,144 @@ object PyMusicBridge {
     ): ListResult = serialized {
         if (page == 1) {
             val key = def.id to typeId
-            categoryPage1Cache[key]
-                ?: categoryLocked(context, def, typeId, page)
-                    .also { categoryPage1Cache[key] = it }
+            val memory = categoryPage1Cache[key]
+            if (memory != null) {
+                memory
+            } else {
+                val disk = readDiskCategory(context, def.id, typeId)
+                if (disk != null) {
+                    categoryPage1Cache[key] = disk
+                    scheduleCategoryRefresh(context, def, typeId)
+                    disk
+                } else {
+                    categoryLocked(context, def, typeId, page).also {
+                        categoryPage1Cache[key] = it
+                        writeDiskCategory(context, def.id, typeId, it)
+                    }
+                }
+            }
         } else {
             categoryLocked(context, def, typeId, page)
+        }
+    }
+
+    /** One background live re-fetch of a disk-served page 1 per process. */
+    private fun scheduleCategoryRefresh(
+        context: Context,
+        def: PyMusicSources.PyDef,
+        typeId: String,
+    ) {
+        synchronized(diskRefreshStarted) {
+            if (!diskRefreshStarted.add("cat:" + def.id + ":" + typeId)) return
+        }
+        val appContext = context.applicationContext
+        refreshScope.launch {
+            try {
+                serialized {
+                    val fresh = categoryLocked(appContext, def, typeId, 1)
+                    categoryPage1Cache[def.id to typeId] = fresh
+                    writeDiskCategory(appContext, def.id, typeId, fresh)
+                }
+            } catch (t: Throwable) {
+                // keep serving the disk copy
+            }
+        }
+    }
+
+    // ------------------------------------------------------- disk cache
+
+    /** Filename-safe cache key: plain slugs pass through, the rest hash. */
+    private fun safeKey(raw: String): String =
+        if (raw.isNotEmpty() && raw.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
+            raw
+        } else {
+            val digest = MessageDigest.getInstance("SHA-1")
+                .digest(raw.toByteArray(Charsets.UTF_8))
+            digest.joinToString("") { "%02x".format(it) }
+        }
+
+    private fun homeDiskFile(context: Context, slug: String): File =
+        File(File(context.filesDir, DISK_DIR), "home_" + safeKey(slug) + ".json")
+
+    private fun categoryDiskFile(context: Context, slug: String, typeId: String): File =
+        File(
+            File(context.filesDir, DISK_DIR),
+            "cat_" + safeKey(slug) + "_" + safeKey(typeId) + ".json",
+        )
+
+    private fun readDiskHome(context: Context, slug: String): HomeResult? =
+        try {
+            val file = homeDiskFile(context, slug)
+            if (!file.isFile) {
+                null
+            } else {
+                val json = JSONObject(file.readText(Charsets.UTF_8))
+                val classes = ArrayList<PyClass>()
+                val array = json.optJSONArray("classes")
+                if (array != null) {
+                    for (i in 0 until array.length()) {
+                        val item = array.optJSONObject(i) ?: continue
+                        classes.add(PyClass(item.optString("id"), item.optString("name")))
+                    }
+                }
+                HomeResult(classes, MusicTrack.listFromJson(json.optString("itemsJson")))
+            }
+        } catch (t: Throwable) {
+            null
+        }
+
+    private fun writeDiskHome(context: Context, slug: String, result: HomeResult) {
+        try {
+            val classes = JSONArray()
+            result.classes.forEach { pyClass ->
+                classes.put(JSONObject().put("id", pyClass.id).put("name", pyClass.name))
+            }
+            val json = JSONObject()
+                .put("classes", classes)
+                .put("itemsJson", MusicTrack.listToJson(result.items))
+            val file = homeDiskFile(context, slug)
+            file.parentFile?.mkdirs()
+            file.writeText(json.toString(), Charsets.UTF_8)
+        } catch (t: Throwable) {
+            // the disk cache is best-effort
+        }
+    }
+
+    private fun readDiskCategory(
+        context: Context,
+        slug: String,
+        typeId: String,
+    ): ListResult? =
+        try {
+            val file = categoryDiskFile(context, slug, typeId)
+            if (!file.isFile) {
+                null
+            } else {
+                val json = JSONObject(file.readText(Charsets.UTF_8))
+                ListResult(
+                    MusicTrack.listFromJson(json.optString("itemsJson")),
+                    json.optInt("pageCount", 1),
+                )
+            }
+        } catch (t: Throwable) {
+            null
+        }
+
+    private fun writeDiskCategory(
+        context: Context,
+        slug: String,
+        typeId: String,
+        result: ListResult,
+    ) {
+        try {
+            val json = JSONObject()
+                .put("itemsJson", MusicTrack.listToJson(result.items))
+                .put("pageCount", result.pageCount)
+            val file = categoryDiskFile(context, slug, typeId)
+            file.parentFile?.mkdirs()
+            file.writeText(json.toString(), Charsets.UTF_8)
+        } catch (t: Throwable) {
+            // the disk cache is best-effort
         }
     }
 

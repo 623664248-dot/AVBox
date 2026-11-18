@@ -12,6 +12,7 @@ import com.github.avbox.osc.BuildConfig
 import com.github.avbox.osc.boot.BootGuard
 import com.github.avbox.osc.data.AppDataManager
 import com.github.avbox.osc.io.FileUtils
+import com.github.avbox.osc.music.MusicWarmStart
 import com.github.avbox.osc.net.HttpClients
 import com.github.avbox.osc.server.ControlManager
 import com.github.avbox.osc.util.AppContextHolder
@@ -54,6 +55,9 @@ class App : Application() {
         AppContextHolder.install(this)
         AppForeground.install(this)
         BootGuard.install()
+        // Warm the remembered music source in the background so
+        // the music tab opens ready instead of loading on entry.
+        MusicWarmStart.warm(this)
         bootMark("bootGuard")
         initParams()
         bootMark("initParams")
