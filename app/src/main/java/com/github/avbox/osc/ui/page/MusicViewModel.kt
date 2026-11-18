@@ -354,6 +354,40 @@ class MusicViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Re-activates the script still loaded in the bridge (v1.25.0):
+     * switching to a py source never unloads the JS runtime, so
+     * coming back to the same script needs no re-init — its source
+     * registry is still there and awaitInited returns at once.
+     * Previously this path paid the script's full init (its server
+     * checks included, ~15 s for 星海） all over again. Returns
+     * false when the bridge holds another (or no) script, or the
+     * registry is gone; the caller then does the full init.
+     */
+    private suspend fun reuseLoadedScript(id: String): Boolean {
+        if (id != LxBridge.loadedScriptId) return false
+        val info = LxBridge.scriptInfo ?: return false
+        return try {
+            applyRegistry(LxBridge.awaitInited())
+            refreshScriptOptions(selectedId = id, info = info)
+            _pyActive.value = false
+            currentPyDef = null
+            KV.put(KV_SCRIPT_ID, id)
+            _messages.tryEmit(
+                str(R.string.music_script_ready, info.name + " " + info.version),
+            )
+            if (lastKeyword.isNotEmpty() && _selectedSource.value.isNotEmpty()) {
+                search(lastKeyword)
+            }
+            if (_mode.value == MusicMode.CHARTS) {
+                loadCharts()
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun applyRegistry(registry: Map<String, LxBridge.SourceInfo>) {
         // Only offer platforms MusicApi can actually search; the scripts also
         // register sources like mg/qs that have no native search yet, and
@@ -383,7 +417,10 @@ class MusicViewModel : ViewModel() {
         val previousId = LxBridge.loadedScriptId
         refreshScriptOptions(selectedId = id)
         viewModelScope.launch {
-            if (initBridge(id)) {
+            if (reuseLoadedScript(id)) {
+                // The bridge still holds this script (a py detour
+                // never unloads it): re-applied without a re-init.
+            } else if (initBridge(id)) {
                 // Only persist the choice once the script actually works.
                 _pyActive.value = false
                 currentPyDef = null

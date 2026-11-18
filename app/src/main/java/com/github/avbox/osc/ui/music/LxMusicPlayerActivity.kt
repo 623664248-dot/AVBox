@@ -14,6 +14,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.SystemClock
+import android.os.TransactionTooLargeException
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -145,6 +146,9 @@ class LxMusicPlayerActivity : BaseActivity() {
         /** AudioFX strength scale is 0..1000; v1.12.0 uses the maximum. */
         private const val EQ_EFFECT_STRENGTH: Short = 1000
 
+        /** Largest queue JSON allowed to ride the start Intent. */
+        private const val MAX_INTENT_QUEUE_CHARS = 200_000
+
         /**
          * Anchor weights (-1..1) of the built-in EQ curves, defined at 5
          * points and linearly interpolated onto the device's band count.
@@ -158,11 +162,28 @@ class LxMusicPlayerActivity : BaseActivity() {
         fun start(context: Context, queueJson: String, index: Int) {
             lastQueueJson = queueJson
             lastIndex = index
-            context.startActivity(
-                Intent(context, LxMusicPlayerActivity::class.java)
-                    .putExtra(EXTRA_QUEUE, queueJson)
-                    .putExtra(EXTRA_INDEX, index),
-            )
+            val intent = Intent(context, LxMusicPlayerActivity::class.java)
+                .putExtra(EXTRA_INDEX, index)
+            // Giant queues (audiobook spiders with thousands of
+            // episodes — 2,280 seen in the wild) overflow the ~1 MB
+            // Binder transaction when the queue JSON rides the
+            // Intent, and startActivity dies with
+            // TransactionTooLargeException: the app just vanishes
+            // on the tap (Torres, 悦听 audiobooks). The queue is
+            // already remembered in lastQueueJson above and init
+            // restores from it when the extra is absent, so only
+            // small queues ride the Intent.
+            if (queueJson.length <= MAX_INTENT_QUEUE_CHARS) {
+                intent.putExtra(EXTRA_QUEUE, queueJson)
+            }
+            try {
+                context.startActivity(intent)
+            } catch (e: TransactionTooLargeException) {
+                // Belt and braces: retry bare; init restores the
+                // queue from lastQueueJson.
+                intent.removeExtra(EXTRA_QUEUE)
+                context.startActivity(intent)
+            }
         }
 
         /**
