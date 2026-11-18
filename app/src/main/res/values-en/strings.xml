@@ -328,6 +328,10 @@
     <string name="music_downloaded">Downloaded</string>
     <string name="music_download_done_toast">Downloaded to %1$s</string>
     <string name="music_download_failed">Download failed</string>
+    <string name="music_download_queue_confirm">Download all %1$d songs in the queue?</string>
+    <string name="music_download_queue_started">Downloading %1$d songs from the queue</string>
+    <string name="music_download_queue_done">Queue download finished: %1$d ok, %2$d failed</string>
+    <string name="music_download_queue_cancelled">Queue download cancelled</string>
     <string name="tab_mine">Me</string>
     <string name="weekday_mon">Mon</string>
     <string name="weekday_tue">Tue</string>

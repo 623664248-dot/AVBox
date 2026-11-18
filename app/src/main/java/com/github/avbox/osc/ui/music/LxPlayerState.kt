@@ -118,6 +118,11 @@ class LxPlayerState {
     /** 0..100 while downloading; -1 when the total size is unknown. */
     var downloadPercent by mutableIntStateOf(-1)
 
+    /** Batch queue download progress (v1.32.0); total 0 = idle. */
+    var queueDlTotal by mutableIntStateOf(0)
+    var queueDlDone by mutableIntStateOf(0)
+    var queueDlFailed by mutableIntStateOf(0)
+
     val current: MusicTrack?
         get() = queue.getOrNull(index)
 }

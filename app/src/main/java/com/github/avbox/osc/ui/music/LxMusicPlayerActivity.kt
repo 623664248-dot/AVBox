@@ -220,6 +220,7 @@ class LxMusicPlayerActivity : BaseActivity() {
     private var tickerJob: Job? = null
     private var colorJob: Job? = null
     private var downloadJob: Job? = null
+    private var queueDownloadJob: Job? = null
 
     // Background-service playback. The bound service's player is just
     // another Player; playbackMode locks at the first start and moves
@@ -463,6 +464,7 @@ class LxMusicPlayerActivity : BaseActivity() {
                         onMoveQueueItem = { from, to -> moveQueueItem(from, to) },
                         onClearQueue = { clearQueue() },
                         onPlayPlaylist = { tracks -> playAsQueue(tracks) },
+                        onDownloadQueue = { downloadQueue() },
                         onToggleFavorite = { toggleFavorite() },
                         onDownload = { downloadCurrent() },
                         onMuteToggle = { toggleMute() },
@@ -1644,6 +1646,90 @@ class LxMusicPlayerActivity : BaseActivity() {
                     Toast.LENGTH_SHORT,
                 ).show()
             }
+        }
+    }
+
+    /**
+     * Batch-downloads the whole queue (v1.32.0, the queue dialog's
+     * download button, QQ-style); tapping again while a batch runs
+     * cancels it. Each track resolves exactly like [downloadCurrent]
+     * does for a non-current track, then streams to the library;
+     * failures are counted, not fatal. Progress rides on
+     * state.queueDlTotal/Done/Failed for the dialog to show.
+     */
+    private fun downloadQueue() {
+        if (queueDownloadJob?.isActive == true) {
+            queueDownloadJob?.cancel()
+            queueDownloadJob = null
+            state.queueDlTotal = 0
+            state.queueDlDone = 0
+            state.queueDlFailed = 0
+            Toast.makeText(
+                this,
+                getString(R.string.music_download_queue_cancelled),
+                Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
+        val tracks = state.queue
+        if (tracks.isEmpty()) return
+        state.queueDlTotal = tracks.size
+        state.queueDlDone = 0
+        state.queueDlFailed = 0
+        Toast.makeText(
+            this,
+            getString(R.string.music_download_queue_started, tracks.size),
+            Toast.LENGTH_SHORT,
+        ).show()
+        queueDownloadJob = lifecycleScope.launch {
+            var done = 0
+            var failed = 0
+            for (track in tracks) {
+                try {
+                    val url: String
+                    val headers: Map<String, String>
+                    if (track.isPy) {
+                        val resolved = PyMusicBridge.resolve(
+                            this@LxMusicPlayerActivity,
+                            pyDefFor(track),
+                            track,
+                        )
+                        url = resolved.url
+                        headers = resolved.headers
+                    } else {
+                        url = LxBridge.getMusicUrl(
+                            track,
+                            MusicPlayPrefs.quality,
+                        )
+                        headers = emptyMap()
+                    }
+                    if (url.isBlank()) {
+                        throw IllegalStateException("blank url")
+                    }
+                    withContext(Dispatchers.IO) {
+                        downloadToLibrary(track, url, headers) {}
+                    }
+                    done++
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failed++
+                }
+                state.queueDlDone = done
+                state.queueDlFailed = failed
+            }
+            state.queueDlTotal = 0
+            state.queueDlDone = 0
+            state.queueDlFailed = 0
+            Toast.makeText(
+                this@LxMusicPlayerActivity,
+                getString(
+                    R.string.music_download_queue_done,
+                    done,
+                    failed,
+                ),
+                Toast.LENGTH_LONG,
+            ).show()
         }
     }
 

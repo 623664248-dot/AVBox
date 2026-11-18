@@ -2111,3 +2111,17 @@ Torres 对照 QQ 音乐「正在播放」面板要求列表显示一致：
    页点任意歌单整表换队列从头播，✕ 删歌单。
    注意这与 QQ 的「已播歌单」（自动记录播过的歌单）
    不同：app 不记录队列来源，做的是可复用的自建歌单。
+
+# v1.32.0 修 v1.31.0 编译错误 + 队列整表下载
+
+v1.31.0 构建失败（run #80 日志，17 个错误同一根源）：
+插入 queueDisplayParts 等助手函数时锚在 QueueDialog
+签名上，把它原有的 KDoc + @Composable 挤到了助手函数
+头上，QueueDialog 本体丢了注解。已把注解移回。
+
+顺带并入 Torres 要的队列下载（QQ 工具行的 ↓）：
+工具行加下载按钮，点后确认「下载队列全部 N 首？」，
+逐首解析（py 走 PyMusicBridge、LX 走 LxBridge，与单曲
+下载同一路径）存到 Music/AVBox；面板内显示进度
+done/total，再点一次取消；结束 toast 报成功/失败数，
+失败跳过不中断。进度状态在 LxPlayerState.queueDl*。

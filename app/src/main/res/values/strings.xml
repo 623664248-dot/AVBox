@@ -328,6 +328,10 @@
     <string name="music_downloaded">已下载</string>
     <string name="music_download_done_toast">已下载到 %1$s</string>
     <string name="music_download_failed">下载失败</string>
+    <string name="music_download_queue_confirm">下载队列全部 %1$d 首？</string>
+    <string name="music_download_queue_started">开始下载队列 %1$d 首</string>
+    <string name="music_download_queue_done">队列下载完成：成功 %1$d 首，失败 %2$d 首</string>
+    <string name="music_download_queue_cancelled">已取消队列下载</string>
     <string name="tab_mine">我的</string>
     <string name="weekday_mon">周一</string>
     <string name="weekday_tue">周二</string>

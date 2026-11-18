@@ -125,6 +125,7 @@ fun LxMusicPlayerScreen(
     onMoveQueueItem: (Int, Int) -> Unit = { _, _ -> },
     onClearQueue: () -> Unit = {},
     onPlayPlaylist: (List<MusicTrack>) -> Unit = {},
+    onDownloadQueue: () -> Unit = {},
     onToggleFavorite: () -> Unit = {},
     onDownload: () -> Unit = {},
     onMuteToggle: () -> Unit = {},
@@ -598,6 +599,7 @@ fun LxMusicPlayerScreen(
             onMove = onMoveQueueItem,
             onClear = onClearQueue,
             onPlayPlaylist = onPlayPlaylist,
+            onDownloadQueue = onDownloadQueue,
         )
     }
 }
@@ -1283,18 +1285,6 @@ private fun formatTimeMs(ms: Long): String {
 }
 
 /**
- * Play queue dialog (v1.30.0, modelled on the QQ Music panel
- * Torres screenshotted): a header with the queue size, a toolbar
- * row carrying the loop mode (tap cycles it, same handler as the
- * transport row's button) and a clear button, then one row per
- * track — title and singer on a single line, the current track in
- * the primary colour with animated bars while it plays, a remove
- * cross per row, and a drag handle that reorders on release.
- * Clearing keeps the current track: stopping the playing song as
- * a side effect of tidying the list is a worse surprise.
- */
-@Composable
-/**
  * Splits a queue track into the (title, artist) pair the row shows,
  * QQ-style. Source names often embed the artist as "歌手《歌名》" or
  * "歌手 - 歌名"; showing the raw name plus the singer field would
@@ -1428,6 +1418,21 @@ private fun QueueTab(
     }
 }
 
+/**
+ * Play queue dialog (v1.30.0, modelled on the QQ Music panel
+ * Torres screenshotted): a header with the queue size, a toolbar
+ * row carrying the loop mode (tap cycles it, same handler as the
+ * transport row's button) and a clear button, then one row per
+ * track — title and singer on a single line, the current track in
+ * the primary colour with animated bars while it plays, a remove
+ * cross per row, and a drag handle that reorders on release.
+ * Clearing keeps the current track: stopping the playing song as
+ * a side effect of tidying the list is a worse surprise.
+ * v1.31.0: QQ-style tabs （正在播放 / 已播歌曲 / 歌单）,
+ * split title - artist rows, save-queue-as-playlist; v1.32.0
+ * adds the batch-download button to the toolbar.
+ */
+@Composable
 private fun QueueDialog(
     state: LxPlayerState,
     onDismiss: () -> Unit,
@@ -1437,6 +1442,7 @@ private fun QueueDialog(
     onMove: (Int, Int) -> Unit,
     onClear: () -> Unit,
     onPlayPlaylist: (List<MusicTrack>) -> Unit,
+    onDownloadQueue: () -> Unit,
 ) {
     val listState = rememberLazyListState()
     var tab by remember { mutableStateOf(0) }
@@ -1452,6 +1458,7 @@ private fun QueueDialog(
         mutableStateOf(LxPlaylists.all(context))
     }
     var showCreate by remember { mutableStateOf(false) }
+    var showDownloadConfirm by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
     var dragIndex by remember { mutableStateOf(-1) }
     var dragOffsetPx by remember { mutableStateOf(0f) }
@@ -1518,6 +1525,25 @@ private fun QueueDialog(
                     Spacer(Modifier.weight(1f))
                     IconButton(
                         onClick = {
+                            if (state.queueDlTotal > 0) {
+                                onDownloadQueue()
+                            } else {
+                                showDownloadConfirm = true
+                            }
+                        },
+                    ) {
+                        Icon(
+                            painter = painterResource(
+                                R.drawable.ic_download,
+                            ),
+                            contentDescription = stringResource(
+                                R.string.music_download,
+                            ),
+                            tint = onSurfaceVariant,
+                        )
+                    }
+                    IconButton(
+                        onClick = {
                             newPlaylistName =
                                 state.current?.singer ?: ""
                             showCreate = true
@@ -1540,6 +1566,16 @@ private fun QueueDialog(
                             tint = onSurfaceVariant,
                         )
                     }
+                }
+                if (state.queueDlTotal > 0) {
+                    Text(
+                        text = stringResource(R.string.music_download) +
+                            " " + state.queueDlDone + "/" +
+                            state.queueDlTotal,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 4.dp),
+                    )
                 }
                 if (tab == 0) {
                 LazyColumn(
@@ -1805,6 +1841,39 @@ private fun QueueDialog(
                 }
             }
         }
+    }
+    if (showDownloadConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDownloadConfirm = false },
+            title = {
+                Text(text = stringResource(R.string.music_download))
+            },
+            text = {
+                Text(
+                    text = stringResource(
+                        R.string.music_download_queue_confirm,
+                        state.queue.size,
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDownloadConfirm = false
+                        onDownloadQueue()
+                    },
+                ) {
+                    Text(text = stringResource(R.string.common_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showDownloadConfirm = false },
+                ) {
+                    Text(text = stringResource(R.string.common_cancel))
+                }
+            },
+        )
     }
     if (showCreate) {
         AlertDialog(
