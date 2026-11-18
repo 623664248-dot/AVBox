@@ -619,36 +619,70 @@ fun MusicPage(
                             .padding(horizontal = 32.dp),
                     )
                 } else if (pyActive) {
-                    PySpiderContent(
-                        items = pyItems,
-                        loading = pyLoading,
-                        loadingMore = pyLoadingMore,
-                        listState = pyListState,
-                        gridState = pyGridState,
-                        searchActive = pySearchActive,
-                        tileGrid = pyTileGrid,
-                        onToggleLayout = { vm.togglePyTileGrid() },
-                        singerGrid = !pySearchActive &&
-                            pyClasses.firstOrNull { it.id == selectedPyClass }
-                                ?.name?.let(::isSingerClassName) == true,
-                        onClearSearch = { vm.pyClearSearch() },
-                        onLoadMore = { vm.pyLoadMore() },
-                        onItemClick = { track -> vm.onPyTrackClick(track) },
-                        onPlayAll = if (
-                            (pySearchActive ||
-                                pyClasses.firstOrNull { it.id == selectedPyClass }
-                                    ?.name?.let(::isSingerClassName) != true) &&
-                            pyItems.any { !it.songmid.startsWith("artist:") }
-                        ) {
-                            { vm.pyPlayAll() }
-                        } else {
-                            null
-                        },
-                    )
-                    if (pyDetailLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.align(Alignment.Center),
+                    val pySingerGrid = !pySearchActive &&
+                        pyClasses.firstOrNull { it.id == selectedPyClass }
+                            ?.name?.let(::isSingerClassName) == true
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        PySpiderContent(
+                            items = pyItems,
+                            loading = pyLoading,
+                            loadingMore = pyLoadingMore,
+                            listState = pyListState,
+                            gridState = pyGridState,
+                            searchActive = pySearchActive,
+                            tileGrid = pyTileGrid,
+                            singerGrid = pySingerGrid,
+                            onClearSearch = { vm.pyClearSearch() },
+                            onLoadMore = { vm.pyLoadMore() },
+                            onItemClick = { track -> vm.onPyTrackClick(track) },
+                            onPlayAll = if (
+                                (pySearchActive ||
+                                    pyClasses.firstOrNull { it.id == selectedPyClass }
+                                        ?.name?.let(::isSingerClassName) != true) &&
+                                pyItems.any { !it.songmid.startsWith("artist:") }
+                            ) {
+                                { vm.pyPlayAll() }
+                            } else {
+                                null
+                            },
                         )
+                        // Layout toggle (v1.27.0): a floating round
+                        // button pinned to the page's top-right above
+                        // the list/tiles, instead of a row inside the
+                        // content. Singer classes keep their avatar
+                        // grid and never see it.
+                        if (!pySingerGrid) {
+                            TopRoundButton(
+                                onClick = { vm.togglePyTileGrid() },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 8.dp, end = 12.dp),
+                            ) {
+                                Icon(
+                                    painter = painterResource(
+                                        if (pyTileGrid) {
+                                            R.drawable.ic_view_list
+                                        } else {
+                                            R.drawable.ic_view_grid
+                                        },
+                                    ),
+                                    contentDescription = stringResource(
+                                        if (pyTileGrid) {
+                                            R.string.music_layout_list
+                                        } else {
+                                            R.string.music_layout_grid
+                                        },
+                                    ),
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        if (pyDetailLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.align(Alignment.Center),
+                            )
+                        }
                     }
                 } else if (mode == MusicMode.CHARTS) {
                     ChartsContent(
@@ -1540,7 +1574,6 @@ private fun PySpiderContent(
     searchActive: Boolean,
     singerGrid: Boolean,
     tileGrid: Boolean,
-    onToggleLayout: () -> Unit,
     onClearSearch: () -> Unit,
     onLoadMore: () -> Unit,
     onItemClick: (MusicTrack) -> Unit,
@@ -1565,53 +1598,21 @@ private fun PySpiderContent(
         }
     }
     Column(modifier = Modifier.fillMaxSize()) {
-        if (searchActive || !singerGrid) {
+        if (searchActive) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (searchActive) {
-                    Text(
-                        text = stringResource(R.string.music_tab_search),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Text(
+                    text = stringResource(R.string.music_tab_search),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Spacer(Modifier.weight(1f))
-                if (searchActive) {
-                    TextButton(onClick = onClearSearch) {
-                        Text(stringResource(R.string.music_py_back_category))
-                    }
-                }
-                // Layout toggle (v1.26.0): rows ⇄ cover tiles.
-                // Singer classes keep their avatar grid and never
-                // see this button.
-                if (!singerGrid) {
-                    IconButton(
-                        onClick = onToggleLayout,
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            painter = painterResource(
-                                if (tileGrid) {
-                                    R.drawable.ic_view_list
-                                } else {
-                                    R.drawable.ic_view_grid
-                                },
-                            ),
-                            contentDescription = stringResource(
-                                if (tileGrid) {
-                                    R.string.music_layout_list
-                                } else {
-                                    R.string.music_layout_grid
-                                },
-                            ),
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                TextButton(onClick = onClearSearch) {
+                    Text(stringResource(R.string.music_py_back_category))
                 }
             }
         }
@@ -1676,8 +1677,10 @@ private fun PySpiderContent(
                         // Cover tiles (v1.26.0): portrait 3:4 cells
                         // like the TVBox shells render vod posters —
                         // the layout Torres pointed at for audiobook
-                        // sources. Same scroll-gated load-more and
-                        // 播放全部 span as the other containers.
+                        // sources. Same scroll-gated load-more as the
+                        // other containers; no 播放全部 here (v1.27.0,
+                        // Torres: the full-width bar goes away in
+                        // tile mode; the list keeps it).
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(3),
                             state = gridState,
@@ -1686,11 +1689,6 @@ private fun PySpiderContent(
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp),
                         ) {
-                            if (onPlayAll != null) {
-                                item(span = { GridItemSpan(maxLineSpan) }) {
-                                    PlayAllButton(onClick = onPlayAll)
-                                }
-                            }
                             itemsIndexed(
                                 items,
                                 key = { index, _ -> index },
