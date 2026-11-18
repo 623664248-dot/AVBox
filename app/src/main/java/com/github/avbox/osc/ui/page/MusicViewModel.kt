@@ -157,21 +157,6 @@ class MusicViewModel : ViewModel() {
     private val _pyItems = MutableStateFlow<List<MusicTrack>>(emptyList())
     val pyItems: StateFlow<List<MusicTrack>> = _pyItems.asStateFlow()
 
-    /**
-     * Py list layout (v1.26.0, Torres: 「能不能平铺」): false =
-     * rows, true = cover tiles. One persisted switch for the whole
-     * py mode; singer classes keep their avatar grid either way.
-     */
-    private val _pyTileGrid = MutableStateFlow(KV.get(KV_PY_TILE_GRID, "") == "1")
-    val pyTileGrid: StateFlow<Boolean> = _pyTileGrid.asStateFlow()
-
-    /** Flips the py list between rows and cover tiles. */
-    fun togglePyTileGrid() {
-        val next = !_pyTileGrid.value
-        _pyTileGrid.value = next
-        KV.put(KV_PY_TILE_GRID, if (next) "1" else "0")
-    }
-
     private val _pyLoading = MutableStateFlow(false)
     val pyLoading: StateFlow<Boolean> = _pyLoading.asStateFlow()
 
@@ -842,12 +827,6 @@ class MusicViewModel : ViewModel() {
      * detail — so they are filtered out; with no song rows at all
      * the call is a no-op (the page hides the button then anyway).
      */
-    fun pyPlayAll() {
-        val queue = _pyItems.value.filterNot { it.songmid.startsWith("artist:") }
-        if (queue.isEmpty()) return
-        _pendingPyPlay.value = PyPlayRequest(queue, 0)
-    }
-
     fun closeEpisodePage() {
         _episodePage.value = null
     }
@@ -1094,7 +1073,6 @@ class MusicViewModel : ViewModel() {
 
     companion object {
         private const val KV_SCRIPT_ID = "lx_music_script_id"
-        private const val KV_PY_TILE_GRID = "lx_py_tile_grid"
 
         /** How much of a picked file the import dispatch sniffs. */
         private const val SNIFF_BYTES = 64 * 1024

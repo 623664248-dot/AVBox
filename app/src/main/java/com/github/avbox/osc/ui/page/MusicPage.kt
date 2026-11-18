@@ -170,7 +170,6 @@ fun MusicPage(
     val pyClasses by vm.pyClasses.collectAsStateWithLifecycle()
     val selectedPyClass by vm.selectedPyClass.collectAsStateWithLifecycle()
     val pyItems by vm.pyItems.collectAsStateWithLifecycle()
-    val pyTileGrid by vm.pyTileGrid.collectAsStateWithLifecycle()
     val pyLoading by vm.pyLoading.collectAsStateWithLifecycle()
     val pyLoadingMore by vm.pyLoadingMore.collectAsStateWithLifecycle()
     val pySearchActive by vm.pySearchActive.collectAsStateWithLifecycle()
@@ -188,7 +187,6 @@ fun MusicPage(
     // remembered inside it would be dropped — returning from an
     // episode list must restore the category list exactly where
     // the user left it (v1.18.1).
-    val pyListState = rememberLazyListState()
     val pyGridState = rememberLazyGridState()
 
     // After a pick, the import runs in the ViewModel and its result
@@ -627,57 +625,13 @@ fun MusicPage(
                             items = pyItems,
                             loading = pyLoading,
                             loadingMore = pyLoadingMore,
-                            listState = pyListState,
                             gridState = pyGridState,
                             searchActive = pySearchActive,
-                            tileGrid = pyTileGrid,
                             singerGrid = pySingerGrid,
                             onClearSearch = { vm.pyClearSearch() },
                             onLoadMore = { vm.pyLoadMore() },
                             onItemClick = { track -> vm.onPyTrackClick(track) },
-                            onPlayAll = if (
-                                (pySearchActive ||
-                                    pyClasses.firstOrNull { it.id == selectedPyClass }
-                                        ?.name?.let(::isSingerClassName) != true) &&
-                                pyItems.any { !it.songmid.startsWith("artist:") }
-                            ) {
-                                { vm.pyPlayAll() }
-                            } else {
-                                null
-                            },
                         )
-                        // Layout toggle (v1.27.0): a floating round
-                        // button pinned to the page's top-right above
-                        // the list/tiles, instead of a row inside the
-                        // content. Singer classes keep their avatar
-                        // grid and never see it.
-                        if (!pySingerGrid) {
-                            TopRoundButton(
-                                onClick = { vm.togglePyTileGrid() },
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(top = 8.dp, end = 12.dp),
-                            ) {
-                                Icon(
-                                    painter = painterResource(
-                                        if (pyTileGrid) {
-                                            R.drawable.ic_view_list
-                                        } else {
-                                            R.drawable.ic_view_grid
-                                        },
-                                    ),
-                                    contentDescription = stringResource(
-                                        if (pyTileGrid) {
-                                            R.string.music_layout_list
-                                        } else {
-                                            R.string.music_layout_grid
-                                        },
-                                    ),
-                                    modifier = Modifier.size(20.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
                         if (pyDetailLoading) {
                             CircularProgressIndicator(
                                 modifier = Modifier.align(Alignment.Center),
@@ -1569,15 +1523,12 @@ private fun PySpiderContent(
     items: List<MusicTrack>,
     loading: Boolean,
     loadingMore: Boolean,
-    listState: LazyListState,
     gridState: LazyGridState,
     searchActive: Boolean,
     singerGrid: Boolean,
-    tileGrid: Boolean,
     onClearSearch: () -> Unit,
     onLoadMore: () -> Unit,
     onItemClick: (MusicTrack) -> Unit,
-    onPlayAll: (() -> Unit)?,
 ) {
     // The scroll states are parameters, hoisted into MusicPage:
     // this content leaves composition while the episode page is
@@ -1590,11 +1541,7 @@ private fun PySpiderContent(
     // `loadingMore` and never trips this.
     LaunchedEffect(loading) {
         if (loading) {
-            if (singerGrid || tileGrid) {
-                gridState.scrollToItem(0)
-            } else {
-                listState.scrollToItem(0)
-            }
+            gridState.scrollToItem(0)
         }
     }
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1673,14 +1620,18 @@ private fun PySpiderContent(
                                 }
                             }
                         }
-                    } else if (tileGrid) {
-                        // Cover tiles (v1.26.0): portrait 3:4 cells
-                        // like the TVBox shells render vod posters —
-                        // the layout Torres pointed at for audiobook
-                        // sources. Same scroll-gated load-more as the
-                        // other containers; no 播放全部 here (v1.27.0,
-                        // Torres: the full-width bar goes away in
-                        // tile mode; the list keeps it).
+                    } else {
+                        // Cover tiles: portrait 3:4 cells like the
+                        // TVBox shells render vod posters — the
+                        // layout Torres pointed at for audiobook
+                        // sources (v1.26.0). Since v1.29.2 this is
+                        // the ONLY layout for non-singer classes:
+                        // Torres asked for the list/tile toggle
+                        // button to go away and tiles to be the
+                        // default, so the row list (and its 播放全部
+                        // bar, already tile-less since v1.27.0) is
+                        // gone. Same scroll-gated load-more as the
+                        // singer grid.
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(3),
                             state = gridState,
@@ -1706,53 +1657,6 @@ private fun PySpiderContent(
                             }
                             if (loadingMore) {
                                 item(span = { GridItemSpan(maxLineSpan) }) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(16.dp),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(24.dp),
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(bottom = 16.dp),
-                        ) {
-                            // 播放全部 pill (v1.19.2) above the song
-                            // rows; the page passes null on singer
-                            // grids and artist-only lists.
-                            if (onPlayAll != null) {
-                                item {
-                                    PlayAllButton(onClick = onPlayAll)
-                                }
-                            }
-                            itemsIndexed(
-                                items,
-                                key = { index, _ -> index },
-                            ) { index, track ->
-                                // Same scroll gate as the singer grid
-                                // above: no chained page fetches while
-                                // the user is still at the top.
-                                if (index >= items.size - 5 &&
-                                    (listState.firstVisibleItemIndex > 0 ||
-                                        listState.firstVisibleItemScrollOffset > 0)
-                                ) {
-                                    LaunchedEffect(index) { onLoadMore() }
-                                }
-                                MusicTrackRow(
-                                    track = track,
-                                    onClick = { onItemClick(track) },
-                                )
-                            }
-                            if (loadingMore) {
-                                item {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
