@@ -2125,3 +2125,12 @@ v1.31.0 构建失败（run #80 日志，17 个错误同一根源）：
 下载同一路径）存到 Music/AVBox；面板内显示进度
 done/total，再点一次取消；结束 toast 报成功/失败数，
 失败跳过不中断。进度状态在 LxPlayerState.queueDl*。
+
+# v1.32.1 修 v1.32.0 的编译错误
+
+v1.32.0 构建失败（run #81 日志，就一个错误）：
+LxMusicPlayerScreen 第 1704 行，(0 until state.index)
+.reversed() 返回的是 IntProgression 不是 List，
+LazyColumn 的 items() 不接受。改成
+(state.index - 1 downTo 0).toList()。其余与
+v1.32.0 相同。

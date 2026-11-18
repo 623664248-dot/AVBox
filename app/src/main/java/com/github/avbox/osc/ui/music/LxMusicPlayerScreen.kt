@@ -1685,7 +1685,7 @@ private fun QueueDialog(
                     }
                 }
                 } else if (tab == 1) {
-                    val playedIndices = (0 until state.index).reversed()
+                    val playedIndices = (state.index - 1 downTo 0).toList()
                     if (playedIndices.isEmpty()) {
                         Text(
                             text = stringResource(
