@@ -219,6 +219,9 @@
     <string name="music_playlist_create_title">存為歌單</string>
     <string name="music_playlist_name_hint">歌單名稱</string>
     <string name="music_playlist_count">%1$d 首</string>
+    <string name="settings_brand_name">靖飛揚</string>
+    <string name="settings_brand_tagline">以筆為橋，記錄煙火與山河</string>
+    <string name="settings_brand_seal">靖</string>
     <string name="music_queue_multi_select">多選</string>
     <string name="music_queue_selected_count">已選 %1$d 首</string>
     <string name="music_queue_selected_playlist_count">已選 %1$d 個</string>

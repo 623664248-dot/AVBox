@@ -173,7 +173,7 @@ fun SettingsPage(
         ) {
             Spacer(Modifier.height(topPad - 20.dp))
 
-            AppInfoHeaderCard(versionName = versionName)
+            AppInfoHeaderCard()
 
             SettingsGroup(title = null) {
                 SettingsCard(SettingsCardPosition.FIRST) {

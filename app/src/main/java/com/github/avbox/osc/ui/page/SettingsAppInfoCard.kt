@@ -1,123 +1,185 @@
 package com.github.avbox.osc.ui.page
 
+import android.util.Base64
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialShapes
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.github.avbox.osc.R
+import java.io.File
 
 private val HeaderCardShape = RoundedCornerShape(32.dp)
 
-private val VersionPillShape = RoundedCornerShape(24.dp)
+/** Warm paper tone of the ink-wash brand card (v1.35.0). */
+private val PaperColor = Color(0xFFF6F1E7)
 
-private val AppBadgeSize = 76.dp
+/** Ink black for the calligraphy on the brand card. */
+private val InkColor = Color(0xFF1B1B1B)
 
-private const val AppIconGlyphScale = 1.26f
+/** Seal-stamp red of the small 靖 stamp on the brand card. */
+private val SealRed = Color(0xFFB23A2E)
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+/**
+ * Ma Shan Zheng calligraphy, subset to the brand glyphs
+ * (~49 KB of the OFL-licensed full font) — it only ever
+ * renders the owner's name, the card's tagline and the
+ * seal character. The subset TTF ships as a base64 asset
+ * (assets/jingfeiyang_ma.b64) and is decoded once into
+ * filesDir/fonts; any failure falls back to the default
+ * font family so the card can never break over a font.
+ */
 @Composable
-internal fun AppInfoHeaderCard(versionName: String) {
-    val scheme = MaterialTheme.colorScheme
-    val contentColor = scheme.onPrimaryContainer
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(HeaderCardShape)
-            .background(scheme.primaryContainer)
-            .padding(horizontal = 20.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(AppBadgeSize)
-                    .clip(MaterialShapes.Cookie12Sided.toShape())
-                    .background(scheme.surfaceBright),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_launcher_foreground),
-                    contentDescription = null,
-                    tint = contentColor,
-                    modifier = Modifier
-                        .size(AppBadgeSize)
-                        .scale(AppIconGlyphScale),
-                )
+private fun rememberCalligraphyFamily(): FontFamily {
+    val context = LocalContext.current
+    return remember {
+        try {
+            val dir = File(context.filesDir, "fonts")
+            dir.mkdirs()
+            val file = File(dir, "jingfeiyang_ma.ttf")
+            if (!file.exists() || file.length() == 0L) {
+                val b64 = context.assets.open("jingfeiyang_ma.b64")
+                    .bufferedReader()
+                    .readText()
+                    .replace(Regex("\\s"), "")
+                file.writeBytes(Base64.decode(b64, Base64.DEFAULT))
             }
-            Spacer(Modifier.width(20.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "AudioVideoBox",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = contentColor,
-                )
-                Text(
-                    text = stringResource(R.string.settings_app_tagline),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = contentColor.copy(alpha = 0.75f),
-                )
-            }
+            FontFamily(Font(file))
+        } catch (t: Throwable) {
+            FontFamily.Default
         }
-        VersionPill(versionText = versionName.ifEmpty { "-" })
     }
 }
 
+/**
+ * The 我的 page header card (v1.35.0): Torres asked for his
+ * own mark instead of the upstream AudioVideoBox card, and
+ * picked the ink-calligraphy design from the mockups — his
+ * name 靖飞扬 in brush calligraphy on a paper-toned card
+ * with a red seal stamp, the tagline under the name, and
+ * two ink-wash blobs drifting very slowly behind it (the
+ * "dynamic" touch from the animated mockup, kept subtle).
+ * The app-version pill he asked to drop is gone; the
+ * version still lives in the About sheet.
+ */
 @Composable
-private fun VersionPill(versionText: String) {
-    val scheme = MaterialTheme.colorScheme
-    val contentColor = scheme.onPrimaryContainer
-    Row(
+internal fun AppInfoHeaderCard() {
+    val calligraphy = rememberCalligraphyFamily()
+    val driftTransition = rememberInfiniteTransition(label = "inkDrift")
+    val drift by driftTransition.animateFloat(
+        initialValue = -12f,
+        targetValue = 12f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 9000),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "inkDriftX",
+    )
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(VersionPillShape)
-            .background(scheme.surfaceContainerLow)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .clip(HeaderCardShape)
+            .background(PaperColor),
     ) {
-        Icon(
-            painter = painterResource(R.drawable.ic_play_decode),
-            contentDescription = null,
-            tint = contentColor,
-            modifier = Modifier.size(28.dp),
+        Box(
+            modifier = Modifier
+                .size(240.dp)
+                .align(Alignment.TopEnd)
+                .graphicsLayer {
+                    translationX = 90f + drift
+                    translationY = -110f
+                }
+                .background(
+                    Brush.radialGradient(
+                        listOf(
+                            InkColor.copy(alpha = 0.13f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
         )
-        Spacer(Modifier.width(16.dp))
-        Column {
-            Text(
-                text = stringResource(R.string.settings_app_version),
-                style = MaterialTheme.typography.bodyMedium,
-                color = contentColor.copy(alpha = 0.75f),
-            )
-            Text(
-                text = versionText,
-                style = MaterialTheme.typography.titleLarge,
-                fontSize = 16.sp,
-                color = contentColor,
-            )
+        Box(
+            modifier = Modifier
+                .size(200.dp)
+                .align(Alignment.BottomStart)
+                .graphicsLayer {
+                    translationX = -80f - drift
+                    translationY = 90f
+                }
+                .background(
+                    Brush.radialGradient(
+                        listOf(
+                            InkColor.copy(alpha = 0.09f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 22.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.settings_brand_name),
+                    fontFamily = calligraphy,
+                    fontSize = 46.sp,
+                    lineHeight = 54.sp,
+                    color = InkColor,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.settings_brand_tagline),
+                    fontFamily = calligraphy,
+                    fontSize = 16.sp,
+                    lineHeight = 22.sp,
+                    color = InkColor.copy(alpha = 0.72f),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .graphicsLayer { rotationZ = -5f }
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(SealRed),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_brand_seal),
+                    fontFamily = calligraphy,
+                    fontSize = 25.sp,
+                    lineHeight = 30.sp,
+                    color = Color.White,
+                )
+            }
         }
     }
 }

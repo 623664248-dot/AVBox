@@ -623,6 +623,9 @@
     <string name="settings_github">访问 GitHub 仓库</string>
     <string name="settings_github_subtitle">访问项目源代码仓库</string>
     <string name="settings_app_tagline">一款开源的视频播放器</string>
+    <string name="settings_brand_name">靖飞扬</string>
+    <string name="settings_brand_tagline">以笔为桥，记录烟火与山河</string>
+    <string name="settings_brand_seal">靖</string>
     <string name="settings_app_version">应用版本</string>
 
     <string name="settings_preference_title">偏好设置</string>

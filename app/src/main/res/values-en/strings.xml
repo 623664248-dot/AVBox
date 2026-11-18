@@ -619,6 +619,9 @@
     <string name="settings_github">Visit GitHub Repository</string>
     <string name="settings_github_subtitle">Open the project source repository</string>
     <string name="settings_app_tagline">Open-source video player</string>
+    <string name="settings_brand_name">靖飞扬</string>
+    <string name="settings_brand_tagline">以笔为桥，记录烟火与山河</string>
+    <string name="settings_brand_seal">靖</string>
     <string name="settings_app_version">App version</string>
 
     <string name="settings_preference_title">Preferences</string>
